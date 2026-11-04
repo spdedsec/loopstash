@@ -1,7 +1,7 @@
 # LOOPSTASH
 
 > **Collect. Preserve. Organise.**  
-> *A lightweight, reliable, open-source media archiving utility.*
+> *A cross-platform media archiving, management, and publishing application.*
 
 [![CI](https://github.com/spdedsec/loopstash/actions/workflows/ci.yml/badge.svg)](https://github.com/spdedsec/loopstash/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -11,185 +11,161 @@
 
 ## ⚡ Overview
 
-**LOOPSTASH** is a terminal-first media archiving utility built for reliability, data preservation, and speed. It discovers and downloads accessible **Instagram Reels** from public profiles in bulk without requiring you to open or click individual links.
-
-### Strict Scope
-- **Instagram Reels only**: Bulk archives all accessible public profile Reels.
-- **Original Quality**: Preserves the original downloaded video stream without re-encoding, transcoding, or quality loss.
-- **Excluded**: Regular photo posts, carousels, Stories, and highlights are intentionally omitted.
+**LOOPSTASH** is a lightweight, privacy-conscious media archiving, management, and publishing application. It provides an end-to-end workflow to:
+1. **Collect**: Discover and download accessible Instagram Reels in highest source quality.
+2. **Preserve**: Capture full original metadata in JSON sidecars alongside untouched MP4 files.
+3. **Organise**: Manage a persistent local media library with inspection, search, verification, and editing.
+4. **Publish & Schedule**: Connect your YouTube channel via official OAuth 2.0, publish immediately, or schedule future public releases via YouTube's `status.publishAt`.
 
 ---
 
 ## ✨ Features
 
-- **Dual-Layer Duplicate Detection**:
-  - **Reel-Level**: Tracks Reel shortcodes and IDs in SQLite. Subsequent runs automatically skip already archived Reels.
-  - **File-Level**: Generates SHA-256 hashes upon download to prevent duplicate file storage and safely resolve naming collisions.
-- **Crash Recovery & Resume**:
-  - Interrupted downloads survive network drops, computer restarts, and crashes.
-  - Run `loopstash resume` to pick up exactly where you left off.
-- **Smart Bounded Retries**:
-  - Exponential backoff with randomized jitter handles transient network glitches and HTTP 5xx errors.
-  - Graceful handling of HTTP 429 rate limits respecting `Retry-After`.
-- **Privacy-First & Secure**:
-  - No passwords required or collected.
-  - Optional session authentication via local browser cookies (`--browser firefox`).
-  - Zero telemetry, zero analytics, zero background daemons.
-- **Cross-Platform Storage**:
-  - Works seamlessly on Arch Linux / Omarchy, Ubuntu, Windows 10/11, and macOS.
-  - Full support for external HDDs, spaces in paths, and Unicode directory names.
-- **Built-in Diagnostics**:
-  - Run `loopstash doctor` to verify environment health, dependency availability, storage permissions, and database integrity.
+- **Strict Scope Archiving**: Captures Instagram Reels exclusively; filters photos, carousels, stories, and highlights.
+- **Dual-Layer Duplicate Detection**: Skips already archived items via database shortcodes and SHA-256 content hashes.
+- **Crash Recovery & Resume**: Resumes interrupted downloads and uploads without re-downloading or re-uploading completed chunks.
+- **Persistent Media Library**: Auto-registers downloaded items, provides full-text search, integrity verification, and metadata export/import.
+- **Metadata Separation**: Preserves original source metadata immutably while offering editable publishing titles, descriptions, and tags mapped to YouTube constraints.
+- **Official YouTube OAuth 2.0**: RFC-compliant token acquisition with secure OS keyring storage and permission-restricted file fallback (`0o600`).
+- **Resumable 4MB Chunked Uploads**: Native Google resumable upload protocol with persistent session URIs in SQLite.
+- **Publication Calendar & Scheduling**: Timezone-aware slot generation using standard IANA timezones and YouTube's native `status.publishAt`.
+- **Daily Quota Manager**: Tracks API usage and enforces daily upload limits to prevent account lockouts.
+- **Section 13 Copyright Safeguards**: Mandatory rights confirmation and pre-upload SHA-256 integrity verification.
+- **Cross-Platform**: Runs natively on Arch Linux, Ubuntu, macOS, and Windows.
 
 ---
 
 ## 🚀 Quick Start
 
-### 1. Installation
+### Installation
 
 Requires **Python 3.11+**, `gallery-dl`, and `ffmpeg`.
 
 ```bash
-# Clone the repository
 git clone https://github.com/spdedsec/loopstash.git ~/loopstash
 cd ~/loopstash
 
-# Create and activate virtual environment
 python3 -m venv .venv
 source .venv/bin/activate
-
-# Install LOOPSTASH in editable mode with development tools
 pip install -e ".[dev]"
-
-# Optional: Symlink binary to user PATH
-ln -sf ~/.local/share/loopstash/loopstash ~/.local/bin/loopstash
 ```
 
-For platform-specific instructions (Arch Linux, Ubuntu, Windows, macOS), see [INSTALL.md](INSTALL.md).
-
-### 2. Verify Installation
-
+Verify your installation:
 ```bash
 loopstash doctor
 ```
 
----
-
-## 💻 CLI Usage
-
-### Bulk Download Profile Reels
-
-Provide an Instagram username or public profile URL:
-
+Install executable symlink in user PATH:
 ```bash
-# By username
-loopstash download @natgeo
-
-# By public URL
-loopstash download "https://www.instagram.com/natgeo/"
-
-# Specify custom destination directory (e.g., External HDD)
-loopstash download @natgeo --output "/media/storage/Instagram_Archive"
-
-# Use browser session cookies for age-restricted or login-prompted profiles
-loopstash download @natgeo --browser firefox
-
-# Force re-download of already archived items
-loopstash download @natgeo --force
-
-# Preview discovered Reels without downloading
-loopstash download @natgeo --dry-run
-```
-
-### Resume Interrupted Jobs
-
-```bash
-# Resume all unfinished or failed downloads
-loopstash resume
-
-# Resume specific creator
-loopstash resume --username natgeo
-```
-
-### View Status & History
-
-```bash
-# View overall archive statistics
-loopstash status
-
-# List recent download records
-loopstash history --limit 25
-
-# List all tracked profiles and their archive counts
-loopstash profiles
-```
-
-### Verify Archive Integrity
-
-Scan downloaded files against database records and verify SHA-256 hashes:
-
-```bash
-# Verify entire archive
-loopstash verify
-
-# Verify specific profile
-loopstash verify --username natgeo
-```
-
-### Configure Settings
-
-```bash
-# View current configuration
-loopstash config
-
-# Update configuration settings
-loopstash config --set max_retries=8
-loopstash config --set download_dir="/mnt/hdd/LOOPSTASH"
-loopstash config --set rate_limit_pause=3.0
-
-# Reset to factory defaults
-loopstash config --reset
+mkdir -p ~/.local/bin
+ln -sf ~/loopstash/.venv/bin/loopstash ~/.local/bin/loopstash
 ```
 
 ---
 
-## 📁 Archive Storage Layout
+## 💻 CLI Usage Guide
 
-Downloads are organized in a clean, predictable hierarchy:
+### 1. Archive Instagram Reels
 
-```text
-LOOPSTASH/
-└── Instagram/
-    └── username/
-        ├── 2026/
-            ├── CwK12345XYZ.mp4
-            └── CwK98765ABC.mp4
-        ├── metadata/
-            ├── CwK12345XYZ.json
-            └── CwK98765ABC.json
-        └── manifest.json
+```bash
+# Archive public profile Reels
+loopstash archive instagram https://www.instagram.com/creator/
+
+# Limit to 10 most recent Reels
+loopstash archive instagram creator --max-items 10
+
+# Resume interrupted downloads
+loopstash archive resume
+
+# View archived profiles and counts
+loopstash archive profiles
 ```
 
-- Each downloaded video is accompanied by rich JSON metadata including timestamps, duration, dimensions, caption, and SHA-256 hash.
-- A profile `manifest.json` tracks the collection summary and last synchronization date.
+### 2. Media Library Management
+
+```bash
+# List all cataloged videos
+loopstash library list
+
+# Search by creator, title, or tags
+loopstash library search "tech demonstration"
+
+# Inspect detailed metadata and disk integrity
+loopstash library inspect <MEDIA_ID>
+
+# Edit publishing metadata and confirm rights
+loopstash library edit <MEDIA_ID> \
+  --title "Clean Video Title" \
+  --description "Description text #demo" \
+  --confirm-rights
+
+# Verify disk files and checksums
+loopstash library verify
+
+# Export library catalog
+loopstash library export --format json --output library.json
+```
+
+### 3. YouTube Publishing
+
+```bash
+# Authenticate YouTube channel via OAuth 2.0
+loopstash publish auth youtube --client-secrets /path/to/client_secret.json
+
+# View connected channels
+loopstash publish accounts
+
+# Preview metadata and check quota before uploading
+loopstash publish preview <MEDIA_ID>
+
+# Publish video immediately (requires copyright rights confirmation)
+loopstash publish youtube <MEDIA_ID> --channel <CHANNEL_ID> --confirm-rights
+
+# Check daily quota usage
+loopstash publish status
+```
+
+### 4. Publication Scheduling
+
+```bash
+# Preview publication calendar slots
+loopstash schedule preview \
+  --start-date 2026-12-01 \
+  --start-time 14:00 \
+  --timezone "Asia/Kolkata" \
+  --count 7 \
+  --interval daily
+
+# Schedule batch release with status.publishAt
+loopstash schedule create <MEDIA_ID_1> <MEDIA_ID_2> \
+  --channel <CHANNEL_ID> \
+  --start-date 2026-12-01 \
+  --start-time 14:00 \
+  --interval every_2d \
+  --timezone "Asia/Kolkata" \
+  --confirm-rights
+
+# List active scheduled entries
+loopstash schedule list
+
+# Reschedule or cancel
+loopstash schedule reschedule <JOB_ID> --date 2026-12-05 --time 16:00 --timezone "Asia/Kolkata"
+loopstash schedule cancel <JOB_ID>
+```
 
 ---
 
-## 🔒 Security & Privacy
+## 📚 Documentation
 
-1. **Authentication Safety**: LOOPSTASH never asks for Instagram credentials. When `--browser` is used, cookies are read locally by `gallery-dl` and never sent to external servers or logged.
-2. **Subprocess Isolation**: Executables are invoked using explicit argument lists without `shell=True`.
-3. **No Code Execution**: Downloaded media is never automatically opened or executed.
-4. **No Telemetry**: LOOPSTASH contains no metrics, phone-home code, or analytics.
-
----
-
-## ⚖️ Disclaimer
-
-LOOPSTASH is an archival utility intended for preserving content you are authorized to download. Please respect creators' rights, copyright regulations, and Instagram's Terms of Service. The maintainers do not endorse unauthorized downloading of copyrighted works.
+- [Architecture & Design](docs/architecture.md)
+- [Installation Guide](docs/installation.md)
+- [Instagram Archiving](docs/instagram.md)
+- [YouTube Publishing](docs/youtube.md)
+- [Scheduling Engine](docs/scheduling.md)
+- [Troubleshooting](docs/troubleshooting.md)
 
 ---
 
 ## 📄 License
 
-LOOPSTASH is licensed under the [MIT License](LICENSE).
+LOOPSTASH is open-source software licensed under the [MIT License](LICENSE).

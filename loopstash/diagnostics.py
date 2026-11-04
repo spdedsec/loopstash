@@ -103,8 +103,16 @@ def check_ffmpeg() -> DiagnosticCheck:
 
 
 def check_dependencies() -> DiagnosticCheck:
-    """Validate Python dependencies are importable."""
-    required = ["typer", "rich", "platformdirs", "gallery_dl"]
+    """Validate core Python dependencies are importable."""
+    required = [
+        "typer",
+        "rich",
+        "platformdirs",
+        "gallery_dl",
+        "googleapiclient",
+        "google.auth",
+        "keyring",
+    ]
     missing = []
     for pkg in required:
         try:
@@ -116,7 +124,7 @@ def check_dependencies() -> DiagnosticCheck:
         return DiagnosticCheck(
             name="Dependencies",
             status="PASS",
-            details="All core libraries (typer, rich, platformdirs, gallery-dl) present.",
+            details="All core libraries (typer, rich, google-api, keyring, etc.) present.",
         )
     return DiagnosticCheck(
         name="Dependencies",
@@ -145,12 +153,13 @@ def check_database_health(db: Optional[Database] = None) -> DiagnosticCheck:
         ok = db.verify_integrity()
         if ok:
             stats = db.get_statistics()
+            media_count = db.count_media_items()
             return DiagnosticCheck(
                 name="Database Health",
                 status="PASS",
                 details=(
-                    f"SQLite integrity check passed. Tracked reels: {stats['total_reels']}, "
-                    f"profiles: {stats['total_profiles']}."
+                    f"SQLite OK (WAL mode). Tracked reels: {stats['total_reels']}, "
+                    f"library items: {media_count}, profiles: {stats['total_profiles']}."
                 ),
             )
         return DiagnosticCheck(
@@ -158,6 +167,40 @@ def check_database_health(db: Optional[Database] = None) -> DiagnosticCheck:
             status="FAIL",
             details="SQLite database integrity check reported errors.",
             remediation="Database may be corrupted. Backup and recreate.",
+        )
+    finally:
+        if own_db and db:
+            db.close()
+
+
+def check_youtube_accounts(db: Optional[Database] = None) -> DiagnosticCheck:
+    """Check if any YouTube channels are authorized for publishing."""
+    own_db = False
+    if db is None:
+        try:
+            db = Database()
+            own_db = True
+        except Exception:
+            return DiagnosticCheck(
+                name="YouTube Accounts",
+                status="WARN",
+                details="Could not inspect database.",
+            )
+
+    try:
+        accounts = db.get_all_publishing_accounts(active_only=True)
+        if accounts:
+            names = [a.channel_title for a in accounts]
+            return DiagnosticCheck(
+                name="YouTube Accounts",
+                status="PASS",
+                details=f"Connected channels: {', '.join(names)}",
+            )
+        return DiagnosticCheck(
+            name="YouTube Accounts",
+            status="WARN",
+            details="No YouTube channel connected.",
+            remediation="Run 'loopstash publish auth youtube' to connect a channel.",
         )
     finally:
         if own_db and db:
@@ -214,12 +257,10 @@ def check_storage_permissions(config: Optional[AppConfig] = None) -> DiagnosticC
 
 
 def check_network_connectivity() -> DiagnosticCheck:
-    """Validate external DNS resolution and HTTPS connectivity to Instagram."""
+    """Validate external DNS resolution and HTTPS connectivity."""
     host = "www.instagram.com"
     try:
-        # 1. DNS check
         ip = socket.gethostbyname(host)
-        # 2. TCP connect check to port 443 with 5-second timeout
         sock = socket.create_connection((ip, 443), timeout=5.0)
         sock.close()
         return DiagnosticCheck(
@@ -254,6 +295,7 @@ def run_all_diagnostics(
         check_ffmpeg(),
         check_dependencies(),
         check_database_health(db),
+        check_youtube_accounts(db),
         check_storage_permissions(config),
         check_network_connectivity(),
     ]
