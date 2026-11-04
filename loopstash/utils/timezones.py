@@ -2,19 +2,33 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone, tzinfo
 from typing import Any, Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
-def get_timezone(tz_name: Optional[str]) -> ZoneInfo:
-    """Return a validated ZoneInfo object. Defaults to UTC if None or empty."""
+def get_timezone(tz_name: Optional[str]) -> tzinfo:
+    """Return a validated timezone object (ZoneInfo or datetime.timezone.utc).
+
+    Defaults to UTC if None or empty. Falls back to datetime.timezone.utc for UTC
+    if ZoneInfo cannot find timezone data (e.g. on Windows without tzdata).
+    """
     if not tz_name or not tz_name.strip():
-        return ZoneInfo("UTC")
+        try:
+            return ZoneInfo("UTC")
+        except (ZoneInfoNotFoundError, KeyError):
+            return timezone.utc
     clean_tz = tz_name.strip()
+    if clean_tz.upper() in ("UTC", "ETC/UTC", "Z"):
+        try:
+            return ZoneInfo(clean_tz)
+        except (ZoneInfoNotFoundError, KeyError):
+            return timezone.utc
     try:
         return ZoneInfo(clean_tz)
     except (ZoneInfoNotFoundError, KeyError) as e:
+        if clean_tz.upper() in ("UTC", "ETC/UTC", "Z"):
+            return timezone.utc
         raise ValueError(
             f"Invalid timezone '{clean_tz}'. Please use a standard IANA timezone name "
             "(e.g. 'UTC', 'Asia/Kolkata', 'America/New_York')."
@@ -164,7 +178,12 @@ def generate_schedule_slots(
     current_dt = first_dt
     for i in range(1, count + 1):
         utc_dt = current_dt.astimezone(timezone.utc)
-        tz_label = tz.key if hasattr(tz, "key") else tz_name
+        tz_label = (
+            getattr(tz, "key", None)
+            or (tz.tzname(None) if hasattr(tz, "tzname") else None)
+            or tz_name
+            or "UTC"
+        )
         formatted_display = f"{current_dt.strftime('%Y-%m-%d %H:%M:%S')} ({tz_label})"
         slots.append(
             {
@@ -173,7 +192,7 @@ def generate_schedule_slots(
                 "local_display": formatted_display,
                 "utc_datetime": utc_dt,
                 "utc_iso": to_utc_iso(utc_dt),
-                "timezone": getattr(tz, "key", tz_name),
+                "timezone": tz_label,
             }
         )
         # Advance by interval; handle daylight saving / wall clock shift gracefully

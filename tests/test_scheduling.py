@@ -20,6 +20,7 @@ from loopstash.publish.scheduler import YouTubeScheduler
 from loopstash.utils.hashing import compute_file_sha256
 from loopstash.utils.timezones import (
     generate_schedule_slots,
+    get_timezone,
     parse_interval,
     parse_schedule_datetime,
     to_utc_iso,
@@ -117,6 +118,53 @@ def test_timezone_conversion_to_utc_iso():
     dt_tokyo = parse_schedule_datetime("2026-12-01", "18:00", "Asia/Tokyo")
     utc_iso_tokyo = to_utc_iso(dt_tokyo)
     assert utc_iso_tokyo == "2026-12-01T09:00:00Z"
+
+
+def test_timezone_utc_fallback_and_validation(monkeypatch):
+    """Test get_timezone normalization and resilient fallback to datetime.timezone.utc."""
+    # 1. Normal resolution
+    tz_none = get_timezone(None)
+    assert tz_none is not None
+    assert tz_none.utcoffset(None) == timedelta(0)
+
+    tz_empty = get_timezone("   ")
+    assert tz_empty.utcoffset(None) == timedelta(0)
+
+    tz_utc = get_timezone("UTC")
+    assert tz_utc.utcoffset(None) == timedelta(0)
+
+    # 2. Resilient fallback when ZoneInfo fails completely (e.g. Windows without tzdata)
+    from zoneinfo import ZoneInfoNotFoundError
+
+    import loopstash.utils.timezones as tm
+
+    def failing_zoneinfo(key):
+        raise ZoneInfoNotFoundError(f"No time zone found with key '{key}'")
+
+    monkeypatch.setattr(tm, "ZoneInfo", failing_zoneinfo)
+
+    # UTC and variants must still safely succeed and return timezone.utc
+    assert tm.get_timezone("UTC") == timezone.utc
+    assert tm.get_timezone("utc") == timezone.utc
+    assert tm.get_timezone(None) == timezone.utc
+    assert tm.get_timezone("") == timezone.utc
+    assert tm.get_timezone("Etc/UTC") == timezone.utc
+
+    # Non-UTC timezone without tzdata should raise clean ValueError
+    with pytest.raises(ValueError, match="Invalid timezone 'America/New_York'"):
+        tm.get_timezone("America/New_York")
+
+    # Schedule slot generation with UTC must still work seamlessly even when ZoneInfo fails
+    future_date = (datetime.now(timezone.utc) + timedelta(days=2)).strftime("%Y-%m-%d")
+    slots = tm.generate_schedule_slots(
+        start_date=future_date,
+        start_time="12:00",
+        tz_name="UTC",
+        count=2,
+    )
+    assert len(slots) == 2
+    assert slots[0]["timezone"] == "UTC"
+    assert slots[0]["utc_iso"].endswith("Z")
 
 
 def test_schedule_batch_execution(sched_db: Database, tmp_path: Path):

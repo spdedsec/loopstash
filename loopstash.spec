@@ -5,7 +5,13 @@ from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 block_cipher = None
 
 datas = []
+try:
+    datas += collect_data_files("tzdata")
+except Exception:
+    pass
+
 hiddenimports = [
+    "tzdata",
     "loopstash",
     "loopstash.cli",
     "loopstash.config",
