@@ -198,3 +198,81 @@ def test_resume_preserves_progress_on_fatal_error(tmp_dir: Path, test_db: Databa
     # REEL_3 should remain PENDING (not attempted after fatal error halted the batch)
     r3 = test_db.get_reel("REEL_3")
     assert r3.status == DownloadStatus.PENDING
+
+
+def test_resume_recovers_intact_disk_files(tmp_dir: Path, test_db: Database):
+    """Test that resume recovers intact on-disk files without re-downloading."""
+    storage = StorageManager(tmp_dir / "storage")
+    username = "crashed_user"
+    profile_url = f"https://www.instagram.com/{username}/"
+    test_db.upsert_profile(username, profile_url)
+
+    reel = ReelItem(
+        shortcode="REEL_CRASHED",
+        username=username,
+        reel_url="https://instagram.com/reel/REEL_CRASHED/",
+        profile_url=profile_url,
+    )
+    # Target file is on disk
+    target_file = storage.get_target_file_path(reel)
+    target_file.parent.mkdir(parents=True, exist_ok=True)
+    target_file.write_bytes(b"ALREADY_SAVED_VIDEO_ON_DISK")
+
+    # DB record is PENDING (e.g. crashed after write, or stale job reset)
+    test_db.upsert_reel(
+        JobRecord(
+            shortcode=reel.shortcode,
+            username=username,
+            profile_url=profile_url,
+            reel_url=reel.reel_url,
+            status=DownloadStatus.PENDING,
+        )
+    )
+
+    mock_backend = MockExtractionBackend(reels=[reel])
+    downloader = Downloader(
+        backend=mock_backend,
+        storage=storage,
+        db=test_db,
+    )
+
+    summaries = downloader.resume(username=username)
+    assert len(summaries) == 1
+    assert summaries[0].downloaded == 1
+    # Backend download should NOT have been invoked because file was already on disk
+    assert mock_backend.download_attempts == 0
+
+    record = test_db.get_reel(reel.shortcode)
+    assert record.status == DownloadStatus.COMPLETED
+    assert record.destination_path == str(target_file)
+    assert record.file_size == len(b"ALREADY_SAVED_VIDEO_ON_DISK")
+
+
+def test_dry_run_does_not_mutate_database(tmp_dir: Path, test_db: Database):
+    """Test that dry-run does not write profiles or queue reels into the database."""
+    storage = StorageManager(tmp_dir / "storage")
+    username = "dryrunuser"
+    profile_url = f"https://www.instagram.com/{username}/"
+    reel = ReelItem(
+        shortcode="DRY_REEL_1",
+        username=username,
+        reel_url="https://instagram.com/reel/DRY_REEL_1/",
+        profile_url=profile_url,
+    )
+
+    mock_backend = MockExtractionBackend(reels=[reel])
+    downloader = Downloader(
+        backend=mock_backend,
+        storage=storage,
+        db=test_db,
+    )
+
+    summary = downloader.download_profile(username, dry_run=True)
+    assert summary.is_dry_run is True
+    assert summary.total_discovered == 1
+    assert summary.downloaded == 0
+
+    # Ensure nothing was stored in the DB
+    assert test_db.get_profile(username) is None
+    assert test_db.get_reel("DRY_REEL_1") is None
+    assert len(test_db.get_resumable_reels()) == 0

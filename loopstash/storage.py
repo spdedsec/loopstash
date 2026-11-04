@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import shutil
 from pathlib import Path
+from typing import Optional
 
 from loopstash.metadata import (
     generate_manifest,
@@ -60,10 +61,11 @@ class StorageManager:
         clean_code = sanitize_filename(f"{reel.shortcode}.{extension.lstrip('.')}")
         return year_dir / clean_code
 
-    def get_metadata_file_path(self, reel: ReelItem) -> Path:
+    def get_metadata_file_path(self, reel: ReelItem, filename_stem: Optional[str] = None) -> Path:
         """Determine path for a Reel's JSON metadata file."""
         meta_dir = self.get_metadata_dir(reel.username)
-        clean_code = sanitize_filename(f"{reel.shortcode}.json")
+        stem = filename_stem or reel.shortcode
+        clean_code = sanitize_filename(f"{stem}.json")
         return meta_dir / clean_code
 
     def get_manifest_path(self, username: str) -> Path:
@@ -125,7 +127,7 @@ class StorageManager:
             shutil.move(str(downloaded_temp_file), str(final_path))
 
         # Write metadata JSON
-        meta_file = self.get_metadata_file_path(reel)
+        meta_file = self.get_metadata_file_path(reel, filename_stem=final_path.stem)
         meta_dict = serialize_reel_metadata(
             reel=reel,
             sha256_hash=sha256,

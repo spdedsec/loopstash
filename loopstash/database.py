@@ -182,44 +182,91 @@ class Database:
                 (now_iso, total_discovered, username),
             )
 
-    def upsert_reel(self, job: JobRecord) -> None:
-        """Insert or update a Reel job record without overwriting completed status."""
+    def upsert_reel(self, job: JobRecord, force: bool = False) -> None:
+        """Insert or update a Reel job record."""
         now_iso = datetime.now(timezone.utc).isoformat()
         with self.transaction() as cur:
-            cur.execute(
-                """
-                INSERT INTO reels (
-                    shortcode, username, profile_url, media_id, reel_url,
-                    status, destination_path, file_size, sha256_hash,
-                    upload_timestamp, download_timestamp, retry_count,
-                    last_error, backend, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(shortcode) DO UPDATE SET
-                    media_id = COALESCE(excluded.media_id, reels.media_id),
-                    upload_timestamp = COALESCE(excluded.upload_timestamp, reels.upload_timestamp),
-                    updated_at = ?
-                WHERE reels.status != 'COMPLETED'
-                """,
-                (
-                    job.shortcode,
-                    job.username,
-                    job.profile_url,
-                    job.media_id,
-                    job.reel_url,
-                    job.status.value,
-                    job.destination_path,
-                    job.file_size,
-                    job.sha256_hash,
-                    job.upload_timestamp,
-                    job.download_timestamp,
-                    job.retry_count,
-                    job.last_error,
-                    job.backend,
-                    now_iso,
-                    now_iso,
-                    now_iso,
-                ),
-            )
+            if force:
+                cur.execute(
+                    """
+                    INSERT INTO reels (
+                        shortcode, username, profile_url, media_id, reel_url,
+                        status, destination_path, file_size, sha256_hash,
+                        upload_timestamp, download_timestamp, retry_count,
+                        last_error, backend, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(shortcode) DO UPDATE SET
+                        profile_url = excluded.profile_url,
+                        media_id = COALESCE(excluded.media_id, reels.media_id),
+                        reel_url = excluded.reel_url,
+                        status = excluded.status,
+                        upload_timestamp = COALESCE(
+                            excluded.upload_timestamp, reels.upload_timestamp
+                        ),
+                        last_error = excluded.last_error,
+                        updated_at = ?
+                    """,
+                    (
+                        job.shortcode,
+                        job.username,
+                        job.profile_url,
+                        job.media_id,
+                        job.reel_url,
+                        job.status.value,
+                        job.destination_path,
+                        job.file_size,
+                        job.sha256_hash,
+                        job.upload_timestamp,
+                        job.download_timestamp,
+                        job.retry_count,
+                        job.last_error,
+                        job.backend,
+                        now_iso,
+                        now_iso,
+                        now_iso,
+                    ),
+                )
+            else:
+                cur.execute(
+                    """
+                    INSERT INTO reels (
+                        shortcode, username, profile_url, media_id, reel_url,
+                        status, destination_path, file_size, sha256_hash,
+                        upload_timestamp, download_timestamp, retry_count,
+                        last_error, backend, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(shortcode) DO UPDATE SET
+                        profile_url = excluded.profile_url,
+                        media_id = COALESCE(excluded.media_id, reels.media_id),
+                        reel_url = excluded.reel_url,
+                        status = excluded.status,
+                        upload_timestamp = COALESCE(
+                            excluded.upload_timestamp, reels.upload_timestamp
+                        ),
+                        last_error = excluded.last_error,
+                        updated_at = ?
+                    WHERE reels.status != 'COMPLETED'
+                    """,
+                    (
+                        job.shortcode,
+                        job.username,
+                        job.profile_url,
+                        job.media_id,
+                        job.reel_url,
+                        job.status.value,
+                        job.destination_path,
+                        job.file_size,
+                        job.sha256_hash,
+                        job.upload_timestamp,
+                        job.download_timestamp,
+                        job.retry_count,
+                        job.last_error,
+                        job.backend,
+                        now_iso,
+                        now_iso,
+                        now_iso,
+                    ),
+                )
 
     def get_reel(self, shortcode: str) -> Optional[JobRecord]:
         """Retrieve a Reel job record by shortcode."""
@@ -486,6 +533,41 @@ class Database:
         if not row:
             return None
         return dict(row)
+
+    def get_all_completed_reels(self) -> list[JobRecord]:
+        """Fetch all completed reels across all profiles."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT shortcode, username, profile_url, media_id, reel_url,
+                   status, destination_path, file_size, sha256_hash,
+                   upload_timestamp, download_timestamp, retry_count,
+                   last_error, backend, created_at, updated_at
+            FROM reels WHERE status = 'COMPLETED'
+            ORDER BY created_at ASC
+            """
+        )
+        return [
+            JobRecord(
+                shortcode=row["shortcode"],
+                username=row["username"],
+                profile_url=row["profile_url"],
+                media_id=row["media_id"],
+                reel_url=row["reel_url"],
+                status=DownloadStatus(row["status"]),
+                destination_path=row["destination_path"],
+                file_size=row["file_size"],
+                sha256_hash=row["sha256_hash"],
+                upload_timestamp=row["upload_timestamp"],
+                download_timestamp=row["download_timestamp"],
+                retry_count=row["retry_count"],
+                last_error=row["last_error"],
+                backend=row["backend"],
+                created_at=row["created_at"],
+                updated_at=row["updated_at"],
+            )
+            for row in cursor.fetchall()
+        ]
 
     def get_all_profiles(self) -> list[ProfileRecord]:
         """Retrieve all tracked profiles with aggregated reel counts."""

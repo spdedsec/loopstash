@@ -15,9 +15,11 @@ from loopstash.backends.base import (
 from loopstash.database import Database
 from loopstash.discovery import DiscoveryEngine
 from loopstash.duplicate import DuplicateDetector
+from loopstash.metadata import serialize_reel_metadata, write_reel_metadata
 from loopstash.models import DownloadProgress, DownloadStatus, JobRecord, ReelItem
 from loopstash.retry import RetryPolicy
 from loopstash.storage import StorageManager
+from loopstash.utils.hashing import compute_file_sha256
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +85,7 @@ class Downloader:
                 profile_input=profile_input,
                 browser=browser,
                 force=force,
+                dry_run=dry_run,
                 max_items=max_items,
             )
         )
@@ -106,6 +109,7 @@ class Downloader:
             profile_url=profile_url,
             summary=summary,
             browser=browser,
+            force=force,
             progress_callback=progress_callback,
         )
 
@@ -169,6 +173,7 @@ class Downloader:
         profile_url: str,
         summary: DownloadSummary,
         browser: Optional[str] = None,
+        force: bool = False,
         progress_callback: Optional[Callable[[DownloadProgress], None]] = None,
     ) -> None:
         """Download a sequence of Reels with error handling and status updates."""
@@ -178,6 +183,44 @@ class Downloader:
         for idx, reel in enumerate(reels, start=1):
             temp_staging = self.storage.prepare_temp_download_path(reel)
             target_path = self.storage.get_target_file_path(reel)
+
+            # Check if file is already fully intact on disk (e.g. from crash prior to DB commit)
+            if not force and target_path.is_file() and target_path.stat().st_size > 0:
+                file_size = target_path.stat().st_size
+                sha256 = compute_file_sha256(target_path)
+                meta_file = self.storage.get_metadata_file_path(reel)
+                if not meta_file.is_file():
+                    meta_dict = serialize_reel_metadata(
+                        reel=reel,
+                        sha256_hash=sha256,
+                        file_size=file_size,
+                        destination_file=str(target_path),
+                    )
+                    write_reel_metadata(meta_file, meta_dict)
+                self.db.mark_completed(
+                    shortcode=reel.shortcode,
+                    destination_path=str(target_path),
+                    file_size=file_size,
+                    sha256_hash=sha256,
+                )
+                summary.downloaded += 1
+                summary.total_bytes += file_size
+                remaining -= 1
+                if progress_callback:
+                    progress_callback(
+                        DownloadProgress(
+                            shortcode=reel.shortcode,
+                            status=DownloadStatus.COMPLETED,
+                            total_reels=summary.total_discovered,
+                            completed_reels=summary.downloaded,
+                            duplicate_reels=summary.skipped_duplicates,
+                            failed_reels=summary.failed,
+                            remaining_reels=remaining,
+                            current_file=target_path.name,
+                            message=f"Verified on disk: {target_path.name}",
+                        )
+                    )
+                continue
 
             self.db.mark_downloading(reel.shortcode)
 

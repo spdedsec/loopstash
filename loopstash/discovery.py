@@ -27,6 +27,7 @@ class DiscoveryEngine:
         profile_input: str,
         browser: Optional[str] = None,
         force: bool = False,
+        dry_run: bool = False,
         max_items: Optional[int] = None,
     ) -> tuple[str, str, list[ReelItem], int]:
         """Validate profile and extract all accessible Reels.
@@ -38,8 +39,9 @@ class DiscoveryEngine:
         if not is_valid or not username or not profile_url:
             raise ValueError(err or f"Invalid Instagram profile input: '{profile_input}'")
 
-        # Register profile in database
-        self.db.upsert_profile(username, profile_url)
+        if not dry_run:
+            # Register profile in database
+            self.db.upsert_profile(username, profile_url)
 
         # Call backend to extract reels
         raw_reels = self.backend.extract_reels(
@@ -59,8 +61,7 @@ class DiscoveryEngine:
 
             if is_dup and not force:
                 duplicates_count += 1
-                # If not already recorded in DB, record as skipped duplicate
-                if not existing_record:
+                if not dry_run and not existing_record:
                     job = JobRecord(
                         shortcode=reel.shortcode,
                         username=username,
@@ -71,22 +72,24 @@ class DiscoveryEngine:
                         upload_timestamp=reel.upload_timestamp,
                         backend=self.backend.name,
                     )
-                    self.db.upsert_reel(job)
+                    self.db.upsert_reel(job, force=force)
                 continue
 
-            # Queue as PENDING in database
-            job = JobRecord(
-                shortcode=reel.shortcode,
-                username=username,
-                profile_url=profile_url,
-                media_id=reel.media_id,
-                reel_url=reel.reel_url,
-                status=DownloadStatus.PENDING,
-                upload_timestamp=reel.upload_timestamp,
-                backend=self.backend.name,
-            )
-            self.db.upsert_reel(job)
+            if not dry_run:
+                # Queue as PENDING in database
+                job = JobRecord(
+                    shortcode=reel.shortcode,
+                    username=username,
+                    profile_url=profile_url,
+                    media_id=reel.media_id,
+                    reel_url=reel.reel_url,
+                    status=DownloadStatus.PENDING,
+                    upload_timestamp=reel.upload_timestamp,
+                    backend=self.backend.name,
+                )
+                self.db.upsert_reel(job, force=force)
             discovered.append(reel)
 
-        self.db.update_profile_sync(username, len(raw_reels))
+        if not dry_run:
+            self.db.update_profile_sync(username, len(raw_reels))
         return username, profile_url, discovered, duplicates_count

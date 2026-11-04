@@ -77,6 +77,18 @@ def test_valid_profile_urls(raw_input: str, expected_user: str, expected_url: st
         ("https://www.instagram.com/explore/", "system endpoint"),
         ("https://www.instagram.com/accounts/", "system endpoint"),
         ("https://www.instagram.com/username/tagged/", "LOOPSTASH archives Reels only"),
+        (
+            "https://www.instagram.com/creator/reel/CgK12345/",
+            "points to a single post/reel",
+        ),
+        (
+            "https://www.instagram.com/creator/reels/extra_segment/",
+            "extra path segments",
+        ),
+        (
+            "https://www.instagram.com/creator/random_page/",
+            "archives reels only",
+        ),
     ],
 )
 def test_invalid_profile_urls(invalid_input: str, expected_substr: str):
@@ -94,3 +106,39 @@ def test_validate_username_rules():
     assert validate_username("a" * 35)[0] is False
     assert validate_username("reels")[0] is False  # Reserved
     assert validate_username("explore")[0] is False  # Reserved
+
+
+def test_reel_item_year_parsing():
+    from loopstash.models import ReelItem
+
+    # ISO string
+    r1 = ReelItem("c1", "user", "url", upload_timestamp="2026-05-15T12:00:00Z")
+    assert r1.get_year() == "2026"
+
+    # Unix timestamp (numeric string: 1715774400 corresponds to year 2024)
+    r2 = ReelItem("c2", "user", "url", upload_timestamp="1715774400")
+    assert r2.get_year() == "2024"
+
+    # Unix timestamp float string
+    r3 = ReelItem("c3", "user", "url", upload_timestamp="1715774400.0")
+    assert r3.get_year() == "2024"
+
+    # Fallback to current year when timestamp is None
+    r4 = ReelItem("c4", "user", "url", upload_timestamp=None)
+    assert len(r4.get_year()) == 4
+
+
+def test_config_browser_nullable(tmp_path):
+    from loopstash.config import load_config, update_config_key
+
+    cfg_file = tmp_path / "test_config.json"
+    cfg = load_config(cfg_file)
+    assert cfg.browser is None
+
+    # Set to firefox
+    cfg = update_config_key("browser", "firefox", cfg_file)
+    assert cfg.browser == "firefox"
+
+    # Set to none (case-insensitive)
+    cfg = update_config_key("browser", "none", cfg_file)
+    assert cfg.browser is None

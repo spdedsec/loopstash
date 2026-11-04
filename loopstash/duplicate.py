@@ -52,6 +52,10 @@ class DuplicateDetector:
             return True, record, "Completed in database."
 
         if record.status == DownloadStatus.SKIPPED_DUPLICATE:
+            if record.destination_path:
+                dest = Path(record.destination_path)
+                if not (dest.is_file() and dest.stat().st_size > 0):
+                    return False, record, "File missing from disk despite duplicate record."
             return True, record, "Previously skipped as duplicate."
 
         return False, record, f"Reel in state {record.status.value}; eligible for download."
@@ -71,8 +75,7 @@ class DuplicateDetector:
         if username:
             records = self.db.get_reels_for_profile(username, status=DownloadStatus.COMPLETED)
         else:
-            records = self.db.get_history(limit=10000)
-            records = [r for r in records if r.status == DownloadStatus.COMPLETED]
+            records = self.db.get_all_completed_reels()
 
         verified = 0
         missing = 0

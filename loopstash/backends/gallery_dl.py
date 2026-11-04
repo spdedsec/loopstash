@@ -350,15 +350,20 @@ class GalleryDlBackend(BaseBackend):
             raise self._classify_error(proc.stderr, proc.returncode)
 
         # Find the downloaded file in temp_dir matching stem
-        matches = list(temp_dir.glob(f"{temp_file.stem}.*"))
+        valid_exts = (".mp4", ".mkv", ".webm", ".mov")
+        matches = [
+            f
+            for f in temp_dir.glob(f"{temp_file.stem}.*")
+            if f.is_file() and f.suffix.lower() in valid_exts and f.stat().st_size > 0
+        ]
         if not matches:
             # Look for any newly created video in temp_dir
             for cand in temp_dir.iterdir():
-                if cand.is_file() and cand.suffix.lower() in (".mp4", ".mkv", ".webm"):
+                if cand.is_file() and cand.suffix.lower() in valid_exts and cand.stat().st_size > 0:
                     matches.append(cand)
                     break
 
-        if not matches or not matches[0].is_file() or matches[0].stat().st_size == 0:
+        if not matches:
             err_details = proc.stderr.strip()
             raise DownloadError(
                 f"No video file produced for Reel '{reel.shortcode}'. Stderr: {err_details}"

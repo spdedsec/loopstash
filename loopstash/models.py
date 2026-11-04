@@ -43,8 +43,18 @@ class ReelItem:
         """Derive the 4-digit upload year for directory structuring."""
         if self.upload_timestamp:
             try:
+                val = str(self.upload_timestamp).strip()
+                # Numeric unix timestamp (e.g. 1715774400 or 1715774400.0)
+                try:
+                    ts = float(val)
+                    if ts > 100000000:
+                        dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+                        return str(dt.year)
+                except ValueError:
+                    pass
                 # ISO format or YYYY-MM-DD
-                return self.upload_timestamp[:4]
+                if len(val) >= 4 and val[:4].isdigit():
+                    return val[:4]
             except Exception:
                 pass
         return str(datetime.now(timezone.utc).year)

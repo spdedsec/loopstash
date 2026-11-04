@@ -131,6 +131,12 @@ def test_finalize_reel_atomic(tmp_dir: Path, sample_reel: ReelItem):
     assert final_path.is_file()
     assert final_path2.is_file()
 
+    # Verify both metadata files exist independently
+    meta_file2 = storage.get_metadata_file_path(sample_reel, filename_stem=final_path2.stem)
+    assert meta_file.is_file()
+    assert meta_file2.is_file()
+    assert meta_file2 != meta_file
+
 
 def test_finalize_reel_empty_or_missing_file_error(tmp_dir: Path, sample_reel: ReelItem):
     """Test that empty or non-existent files are rejected."""

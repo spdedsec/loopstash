@@ -110,6 +110,14 @@ def download(
         console.print(f"[bold red]Error:[/bold red] {err}")
         raise typer.Exit(code=1)
 
+    if max_retries is not None and max_retries < 0:
+        console.print("[bold red]Error:[/bold red] --max-retries must be non-negative (>= 0).")
+        raise typer.Exit(code=1)
+
+    if max_items is not None and max_items <= 0:
+        console.print("[bold red]Error:[/bold red] --max-items must be greater than 0.")
+        raise typer.Exit(code=1)
+
     print_header()
 
     target_dir = output or Path(cfg.download_dir)
@@ -220,7 +228,14 @@ def resume(
 
     target_user = None
     if profile_url:
-        _, target_user, _, _ = validate_instagram_url(profile_url)
+        is_valid, target_user, _, err = validate_instagram_url(profile_url)
+        if not is_valid or not target_user:
+            console.print(f"[bold red]Error:[/bold red] {err}")
+            raise typer.Exit(code=1)
+
+    if max_retries is not None and max_retries < 0:
+        console.print("[bold red]Error:[/bold red] --max-retries must be non-negative (>= 0).")
+        raise typer.Exit(code=1)
 
     print_header(subtitle="Resuming Interrupted Downloads")
 
@@ -307,9 +322,9 @@ def status(
     db = Database()
 
     if profile_url:
-        _, username, _, _ = validate_instagram_url(profile_url)
-        if not username:
-            console.print(f"[bold red]Invalid username or URL:[/bold red] {profile_url}")
+        is_valid, username, _, err = validate_instagram_url(profile_url)
+        if not is_valid or not username:
+            console.print(f"[bold red]Error:[/bold red] {err}")
             raise typer.Exit(code=1)
 
         prof = db.get_profile(username)
@@ -396,7 +411,10 @@ def verify_cmd(
 
     target_user = None
     if profile_url:
-        _, target_user, _, _ = validate_instagram_url(profile_url)
+        is_valid, target_user, _, err = validate_instagram_url(profile_url)
+        if not is_valid or not target_user:
+            console.print(f"[bold red]Error:[/bold red] {err}")
+            raise typer.Exit(code=1)
 
     with console.status("[cyan]Verifying media files and computing SHA-256 digests...[/cyan]"):
         results = detector.verify_archive(username=target_user)
@@ -417,9 +435,11 @@ def verify_cmd(
 
     if results["missing"] > 0 or results["corrupted"] > 0:
         console.print("\n[bold yellow]Attention Required:[/bold yellow]")
-        for code, status, reason in results["details"]:
-            if status != "OK":
-                console.print(f"  • [bold red]{code}[/bold red] ({status}): {reason}")
+        issue_items = [(code, st, reason) for code, st, reason in results["details"] if st != "OK"]
+        for code, status, reason in issue_items[:20]:
+            console.print(f"  • [bold red]{code}[/bold red] ({status}): {reason}")
+        if len(issue_items) > 20:
+            console.print(f"  ... and {len(issue_items) - 20} more issues.")
 
 
 @app.command(name="doctor")

@@ -113,14 +113,29 @@ def validate_instagram_url(
         )
 
     # If path has multiple segments, second segment should only be reels or empty
-    if len(path_parts) > 1 and path_parts[1].lower() not in ("reels", ""):
-        # User might have passed /username/tagged or /username/stories
-        if path_parts[1].lower() in ("tagged", "saved", "followers", "following", "channel"):
+    if len(path_parts) > 1:
+        second_segment = path_parts[1].lower()
+        if second_segment in ("p", "reel", "tv"):
+            return (
+                False,
+                None,
+                None,
+                f"URL '{trimmed}' points to a single post/reel, not a profile. "
+                "LOOPSTASH requires a profile URL (e.g., https://www.instagram.com/username/).",
+            )
+        if second_segment not in ("reels", ""):
             return (
                 False,
                 None,
                 None,
                 f"URL specifies /{path_parts[1]}/. LOOPSTASH archives Reels only.",
+            )
+        if len(path_parts) > 2:
+            return (
+                False,
+                None,
+                None,
+                f"URL path '{trimmed}' contains unsupported extra path segments.",
             )
 
     username = first_segment

@@ -173,3 +173,41 @@ def test_verify_archive(test_db: Database, sample_reel: ReelItem, tmp_dir: Path)
     assert res["verified"] == 1
     assert res["missing"] == 1
     assert res["corrupted"] == 2
+
+    # Global verification across all profiles
+    global_res = detector.verify_archive(username=None)
+    assert global_res["total_checked"] == 4
+    assert global_res["verified"] == 1
+
+
+def test_skipped_duplicate_file_missing_allows_redownload(
+    test_db: Database, sample_reel: ReelItem, tmp_dir: Path
+):
+    """Test that a SKIPPED_DUPLICATE record with missing disk file allows redownloading."""
+    detector = DuplicateDetector(test_db)
+    test_db.upsert_profile(sample_reel.username, sample_reel.profile_url)
+
+    dest_file = tmp_dir / "dup.mp4"
+    dest_file.write_bytes(b"DATA")
+
+    test_db.upsert_reel(
+        JobRecord(
+            shortcode=sample_reel.shortcode,
+            username=sample_reel.username,
+            profile_url=sample_reel.profile_url,
+            reel_url=sample_reel.reel_url,
+            status=DownloadStatus.SKIPPED_DUPLICATE,
+            destination_path=str(dest_file),
+            file_size=4,
+        )
+    )
+
+    # When file exists on disk
+    is_dup, _, _ = detector.check_reel_duplicate(sample_reel.shortcode)
+    assert is_dup is True
+
+    # When file is removed from disk
+    dest_file.unlink()
+    is_dup, _, reason = detector.check_reel_duplicate(sample_reel.shortcode)
+    assert is_dup is False
+    assert "File missing from disk" in reason

@@ -98,15 +98,15 @@ def update_config_key(key: str, value: Any, path: Optional[Path] = None) -> AppC
         raise KeyError(f"Unknown configuration key: {key}")
 
     current_val = getattr(cfg, key)
-    if isinstance(current_val, int):
+    if isinstance(value, str) and value.strip().lower() in ("none", "null", ""):
+        value = None
+    elif isinstance(current_val, int):
         value = int(value)
     elif isinstance(current_val, float):
         value = float(value)
     elif isinstance(current_val, bool):
         if isinstance(value, str):
             value = value.lower() in ("true", "1", "yes")
-    elif value == "None" or value == "null":
-        value = None
 
     setattr(cfg, key, value)
     cfg.validate()
