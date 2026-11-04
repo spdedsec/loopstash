@@ -232,3 +232,94 @@ def test_upload_file_hash_mismatch_fails_safely(
             metadata=meta,
             youtube_service=mock_service,
         )
+
+
+def test_upload_resumes_from_incomplete_308_range(
+    upload_db: Database, sample_media: tuple[MediaItem, PublishingMetadata, PublishingJob]
+):
+    """Test that existing incomplete session with HTTP 308 resumes from confirmed byte position."""
+    media, meta, job = sample_media
+    uploader = YouTubeUploader(upload_db)
+
+    # Save existing session
+    session = UploadSession(
+        session_uri="https://youtube.googleapis.com/upload/partial_session_uri",
+        job_id=job.id,
+        file_path=media.file_path,
+        file_size=media.file_size,
+        bytes_uploaded=500,
+        last_chunk_byte=500,
+    )
+    upload_db.save_upload_session(session)
+
+    # Mock HTTP 308 Resume Incomplete with Range header
+    mock_put_resp = MagicMock()
+    mock_put_resp.status_code = 308
+    mock_put_resp.headers = {"Range": "bytes=0-999"}
+
+    mock_service = MagicMock()
+    mock_request = MagicMock()
+    mock_request.resumable_uri = session.session_uri
+    mock_response = {"id": "RESUMED_VIDEO_SUCCESS"}
+    mock_request.next_chunk.return_value = (None, mock_response)
+    mock_service.videos.return_value.insert.return_value = mock_request
+    mock_service.videos.return_value.list.return_value.execute.return_value = {
+        "items": [{"id": "RESUMED_VIDEO_SUCCESS", "status": {"uploadStatus": "uploaded"}}]
+    }
+
+    with patch("requests.put", return_value=mock_put_resp):
+        vid_id, vid_url = uploader.upload_media(
+            job=job,
+            media_item=media,
+            metadata=meta,
+            youtube_service=mock_service,
+        )
+
+    assert vid_id == "RESUMED_VIDEO_SUCCESS"
+    assert vid_url == "https://youtu.be/RESUMED_VIDEO_SUCCESS"
+    # Verify request resumed from byte 1000
+    assert mock_request.resumable_progress == 1000
+    assert mock_request.resumable_uri == session.session_uri
+
+
+def test_upload_reconciliation_uncertainty_marks_needs_attention(
+    upload_db: Database, sample_media: tuple[MediaItem, PublishingMetadata, PublishingJob]
+):
+    """Test Section 16 rule: uncertain upload status marks job NEEDS_ATTENTION
+    and never duplicates.
+    """
+    media, meta, job = sample_media
+    uploader = YouTubeUploader(upload_db)
+
+    session = UploadSession(
+        session_uri="https://youtube.googleapis.com/upload/uncertain_session_uri",
+        job_id=job.id,
+        file_path=media.file_path,
+        file_size=media.file_size,
+        bytes_uploaded=500,
+        last_chunk_byte=500,
+    )
+    upload_db.save_upload_session(session)
+
+    # Mock HTTP 500 internal server error during reconciliation
+    mock_put_resp = MagicMock()
+    mock_put_resp.status_code = 500
+    mock_put_resp.text = "Internal Server Error"
+
+    mock_service = MagicMock()
+
+    with patch("requests.put", return_value=mock_put_resp):
+        with pytest.raises(RuntimeError, match="Upload session state uncertain"):
+            uploader.upload_media(
+                job=job,
+                media_item=media,
+                metadata=meta,
+                youtube_service=mock_service,
+            )
+
+    # Verify job marked as NEEDS_ATTENTION in database
+    updated_job = upload_db.get_publishing_job(job.id)
+    assert updated_job is not None
+    assert updated_job.status == PublishStatus.NEEDS_ATTENTION
+    # Verify insert was never called to prevent accidental duplicate videos
+    mock_service.videos.return_value.insert.assert_not_called()

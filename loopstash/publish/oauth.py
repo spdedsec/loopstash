@@ -110,13 +110,25 @@ class YouTubeAuthManager:
         )
 
         if manual:
-            creds = flow.run_console()
+            try:
+                creds = flow.run_local_server(port=0, prompt="consent", open_browser=False)
+            except Exception as e:
+                logger.info("Local server binding failed (%s), prompting with URL", e)
+                auth_url, _ = flow.authorization_url(prompt="consent")
+                print(f"\nPlease visit this URL to authorize LOOPSTASH:\n\n{auth_url}\n")
+                code = input("Enter the authorization code: ").strip()
+                flow.fetch_token(code=code)
+                creds = flow.credentials
         else:
             try:
-                creds = flow.run_local_server(port=0, prompt="consent")
+                creds = flow.run_local_server(port=0, prompt="consent", open_browser=True)
             except Exception as e:
-                logger.info("Local server auth failed (%s), falling back to console flow", e)
-                creds = flow.run_console()
+                logger.info(
+                    "Local server browser auth failed (%s), "
+                    "falling back to browserless local server",
+                    e,
+                )
+                creds = flow.run_local_server(port=0, prompt="consent", open_browser=False)
 
         youtube_client = build("youtube", "v3", credentials=creds)
 

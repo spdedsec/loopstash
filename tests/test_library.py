@@ -268,3 +268,84 @@ def test_library_import_directory_with_sidecars(test_db_instance: Database, tmp_
     results2 = mgr.import_directory(import_dir, username="test_importer")
     assert results2["imported"] == 0
     assert results2["skipped_duplicates"] == 2
+
+
+def test_library_manager_status_filters_and_exclusion(test_db_instance: Database):
+    """Test filtering by download status, publish status, and excluding items."""
+    db = test_db_instance
+    mgr = LibraryManager(db)
+
+    from loopstash.models import DownloadStatus, JobRecord, PublishingJob, PublishStatus
+
+    # Insert items
+    item1 = MediaItem(id="flt_01", username="creator1", title="Video 1")
+    item2 = MediaItem(id="flt_02", username="creator2", title="Video 2")
+    db.upsert_media_item(item1)
+    db.upsert_media_item(item2)
+
+    # Reels tracking download status
+    db.upsert_profile("creator1", "https://instagram.com/creator1/")
+    db.upsert_profile("creator2", "https://instagram.com/creator2/")
+    db.upsert_reel(
+        JobRecord(
+            shortcode="flt_01",
+            username="creator1",
+            profile_url="https://instagram.com/creator1/",
+            reel_url="https://instagram.com/reel/flt_01/",
+            status=DownloadStatus.COMPLETED,
+        )
+    )
+    db.upsert_reel(
+        JobRecord(
+            shortcode="flt_02",
+            username="creator2",
+            profile_url="https://instagram.com/creator2/",
+            reel_url="https://instagram.com/reel/flt_02/",
+            status=DownloadStatus.FAILED,
+        )
+    )
+
+    # Publishing account and job tracking publish status
+    from loopstash.models import PublishingAccount
+
+    db.upsert_publishing_account(
+        PublishingAccount(
+            id="UC_CH_1",
+            channel_id="UC_CH_1",
+            channel_title="Filter Test Channel",
+            token_storage_key="file:UC_CH_1",
+        )
+    )
+    db.upsert_publishing_job(
+        PublishingJob(
+            id="job_flt_01",
+            media_id="flt_01",
+            channel_id="UC_CH_1",
+            status=PublishStatus.PUBLISHED,
+        )
+    )
+
+    # 1. Filter by download status
+    completed = mgr.list_items(download_status="COMPLETED")
+    assert len(completed) == 1
+    assert completed[0].id == "flt_01"
+
+    failed = mgr.list_items(download_status="FAILED")
+    assert len(failed) == 1
+    assert failed[0].id == "flt_02"
+
+    # 2. Filter by publish status
+    published = mgr.list_items(publish_status="PUBLISHED")
+    assert len(published) == 1
+    assert published[0].id == "flt_01"
+
+    # 3. Test exclude_item
+    assert mgr.exclude_item("flt_01", is_excluded=True) is True
+    # Default list excludes excluded items
+    active_items = mgr.list_items(excluded=False)
+    assert len(active_items) == 1
+    assert active_items[0].id == "flt_02"
+
+    # Undo exclude
+    assert mgr.exclude_item("flt_01", is_excluded=False) is True
+    assert len(mgr.list_items(excluded=False)) == 2

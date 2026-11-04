@@ -276,3 +276,58 @@ def test_dry_run_does_not_mutate_database(tmp_dir: Path, test_db: Database):
     assert test_db.get_profile(username) is None
     assert test_db.get_reel("DRY_REEL_1") is None
     assert len(test_db.get_resumable_reels()) == 0
+
+
+def test_download_preserves_full_metadata(tmp_dir: Path, test_db: Database):
+    """Test that Downloader preserves caption, hashtags, derived title,
+    dimensions, duration, and raw json.
+    """
+    storage = StorageManager(tmp_dir / "storage")
+    username = "artisan_creator"
+    profile_url = f"https://www.instagram.com/{username}/"
+    reel = ReelItem(
+        shortcode="META_PRESERVE_01",
+        username=username,
+        reel_url="https://instagram.com/reel/META_PRESERVE_01/",
+        profile_url=profile_url,
+        title="Original Video Title",
+        caption="Crafting handmade ceramic mugs from local clay #ceramics #pottery #craft",
+        duration=42.5,
+        width=1080,
+        height=1920,
+        extra_metadata={"custom_id": "ceramic_01", "fps": 60},
+    )
+
+    mock_backend = MockExtractionBackend(reels=[reel])
+    downloader = Downloader(
+        backend=mock_backend,
+        storage=storage,
+        db=test_db,
+    )
+
+    summary = downloader.download_profile(username)
+    assert summary.downloaded == 1
+
+    # Verify media_items table has caption, duration, dimensions
+    media = test_db.get_media_item("META_PRESERVE_01")
+    assert media is not None
+    assert (
+        media.caption == "Crafting handmade ceramic mugs from local clay #ceramics #pottery #craft"
+    )
+    assert media.duration == 42.5
+    assert media.width == 1080
+    assert media.height == 1920
+    assert "Crafting handmade ceramic mugs" in media.title
+
+    # Verify publishing_metadata has derived title, tags, and attribution description
+    pub_meta = test_db.get_publishing_metadata("META_PRESERVE_01")
+    assert pub_meta is not None
+    assert "Crafting handmade ceramic mugs" in pub_meta.title
+    assert "ceramics" in pub_meta.tags
+    assert "pottery" in pub_meta.tags
+    assert "Original source:" in pub_meta.description
+
+    # Verify media_metadata raw JSON
+    raw_meta = test_db.get_media_metadata("META_PRESERVE_01")
+    assert raw_meta is not None
+    assert raw_meta.raw_json.get("custom_id") == "ceramic_01"

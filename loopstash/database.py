@@ -13,6 +13,7 @@ from loopstash.models import (
     DownloadStatus,
     JobRecord,
     MediaItem,
+    MediaMetadata,
     ProfileRecord,
     PublishingAccount,
     PublishingJob,
@@ -327,8 +328,7 @@ class Database:
                     "CREATE INDEX IF NOT EXISTS idx_pub_jobs_media ON publishing_jobs(media_id)"
                 )
                 cur.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_sched_time "
-                    "ON schedule_entries(scheduled_utc)"
+                    "CREATE INDEX IF NOT EXISTS idx_sched_time ON schedule_entries(scheduled_utc)"
                 )
 
                 cur.execute(
@@ -420,10 +420,23 @@ class Database:
                         updated_at = ?
                     """,
                     (
-                        job.shortcode, job.username, job.profile_url, job.media_id, job.reel_url,
-                        job.status.value, job.destination_path, job.file_size, job.sha256_hash,
-                        job.upload_timestamp, job.download_timestamp, job.retry_count,
-                        job.last_error, job.backend, now_iso, now_iso, now_iso,
+                        job.shortcode,
+                        job.username,
+                        job.profile_url,
+                        job.media_id,
+                        job.reel_url,
+                        job.status.value,
+                        job.destination_path,
+                        job.file_size,
+                        job.sha256_hash,
+                        job.upload_timestamp,
+                        job.download_timestamp,
+                        job.retry_count,
+                        job.last_error,
+                        job.backend,
+                        now_iso,
+                        now_iso,
+                        now_iso,
                     ),
                 )
             else:
@@ -448,10 +461,23 @@ class Database:
                     WHERE reels.status != 'COMPLETED'
                     """,
                     (
-                        job.shortcode, job.username, job.profile_url, job.media_id, job.reel_url,
-                        job.status.value, job.destination_path, job.file_size, job.sha256_hash,
-                        job.upload_timestamp, job.download_timestamp, job.retry_count,
-                        job.last_error, job.backend, now_iso, now_iso, now_iso,
+                        job.shortcode,
+                        job.username,
+                        job.profile_url,
+                        job.media_id,
+                        job.reel_url,
+                        job.status.value,
+                        job.destination_path,
+                        job.file_size,
+                        job.sha256_hash,
+                        job.upload_timestamp,
+                        job.download_timestamp,
+                        job.retry_count,
+                        job.last_error,
+                        job.backend,
+                        now_iso,
+                        now_iso,
+                        now_iso,
                     ),
                 )
 
@@ -652,9 +678,7 @@ class Database:
             derived_title = _derive_title(caption, shortcode)
             tags = _extract_hashtags(caption)
             source_url = (
-                reel_row["reel_url"]
-                if reel_row
-                else f"https://www.instagram.com/reel/{shortcode}/"
+                reel_row["reel_url"] if reel_row else f"https://www.instagram.com/reel/{shortcode}/"
             )
             desc_text = (
                 f"{caption}\n\nOriginal source: {source_url}"
@@ -681,9 +705,20 @@ class Database:
                     updated_at = excluded.updated_at
                 """,
                 (
-                    shortcode, shortcode, uname, derived_title, caption,
-                    destination_path, file_size, sha256_hash, duration, width, height,
-                    upload_ts, now_iso, now_iso,
+                    shortcode,
+                    shortcode,
+                    uname,
+                    derived_title,
+                    caption,
+                    destination_path,
+                    file_size,
+                    sha256_hash,
+                    duration,
+                    width,
+                    height,
+                    upload_ts,
+                    now_iso,
+                    now_iso,
                 ),
             )
 
@@ -990,10 +1025,23 @@ class Database:
                     updated_at = excluded.updated_at
                 """,
                 (
-                    item.id, item.source_platform, item.source_id, item.username, item.title,
-                    item.caption, item.file_path, item.file_size, item.sha256, item.duration,
-                    item.width, item.height, item.upload_timestamp, item.download_timestamp,
-                    1 if item.is_excluded else 0, item.created_at or now_iso, now_iso,
+                    item.id,
+                    item.source_platform,
+                    item.source_id,
+                    item.username,
+                    item.title,
+                    item.caption,
+                    item.file_path,
+                    item.file_size,
+                    item.sha256,
+                    item.duration,
+                    item.width,
+                    item.height,
+                    item.upload_timestamp,
+                    item.download_timestamp,
+                    1 if item.is_excluded else 0,
+                    item.created_at or now_iso,
+                    now_iso,
                 ),
             )
 
@@ -1036,10 +1084,14 @@ class Database:
         self,
         username: Optional[str] = None,
         excluded: Optional[bool] = None,
+        download_status: Optional[str] = None,
+        publish_status: Optional[str] = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[MediaItem]:
-        """Fetch media items with optional filters."""
+        """Fetch media items with optional filters including creator, exclusion,
+        download status, and publish status.
+        """
         cursor = self.conn.cursor()
         conditions = []
         params: list = []
@@ -1050,6 +1102,12 @@ class Database:
         if excluded is not None:
             conditions.append("is_excluded = ?")
             params.append(1 if excluded else 0)
+        if download_status:
+            conditions.append("id IN (SELECT shortcode FROM reels WHERE status = ?)")
+            params.append(download_status.upper().strip())
+        if publish_status:
+            conditions.append("id IN (SELECT media_id FROM publishing_jobs WHERE status = ?)")
+            params.append(publish_status.upper().strip())
 
         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         query = f"""
@@ -1178,10 +1236,18 @@ class Database:
                     updated_at = excluded.updated_at
                 """,
                 (
-                    meta.media_id, meta.title, meta.description, tags_json,
-                    meta.category_id, meta.privacy_status, 1 if meta.made_for_kids else 0,
-                    meta.thumbnail_path, meta.language, 1 if meta.rights_confirmed else 0,
-                    meta.rights_notes, now_iso,
+                    meta.media_id,
+                    meta.title,
+                    meta.description,
+                    tags_json,
+                    meta.category_id,
+                    meta.privacy_status,
+                    1 if meta.made_for_kids else 0,
+                    meta.thumbnail_path,
+                    meta.language,
+                    1 if meta.rights_confirmed else 0,
+                    meta.rights_notes,
+                    now_iso,
                 ),
             )
 
@@ -1221,6 +1287,67 @@ class Database:
             updated_at=row["updated_at"],
         )
 
+    def get_media_metadata(self, media_id: str) -> Optional[MediaMetadata]:
+        """Fetch preserved raw source metadata and properties for a media item."""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM media_metadata WHERE media_id = ?", (media_id,))
+        row = cursor.fetchone()
+        if not row:
+            return None
+        raw_json_str = row["raw_json"] or "{}"
+        try:
+            tags = json.loads(row["hashtags"]) if row["hashtags"] else []
+        except Exception:
+            tags = []
+        try:
+            extra_dict = json.loads(row["extra"]) if row["extra"] else {}
+        except Exception:
+            extra_dict = {}
+
+        return MediaMetadata(
+            media_id=row["media_id"],
+            raw_json=json.loads(raw_json_str)
+            if raw_json_str.startswith(("{", "["))
+            else raw_json_str,
+            hashtags=tags,
+            audio_info=row["audio_info"],
+            thumbnail_url=row["thumbnail_url"],
+            thumbnail_path=row["thumbnail_path"],
+            extra=extra_dict,
+        )
+
+    def upsert_media_metadata(self, meta: MediaMetadata) -> None:
+        """Insert or update media metadata record."""
+        raw_str = meta.raw_json if isinstance(meta.raw_json, str) else json.dumps(meta.raw_json)
+        tags_str = (
+            json.dumps(meta.hashtags) if isinstance(meta.hashtags, list) else str(meta.hashtags)
+        )
+        extra_str = json.dumps(meta.extra) if isinstance(meta.extra, dict) else str(meta.extra)
+        with self.transaction() as cur:
+            cur.execute(
+                """
+                INSERT INTO media_metadata (
+                    media_id, raw_json, hashtags, audio_info, thumbnail_url, thumbnail_path, extra
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(media_id) DO UPDATE SET
+                    raw_json = excluded.raw_json,
+                    hashtags = excluded.hashtags,
+                    audio_info = excluded.audio_info,
+                    thumbnail_url = excluded.thumbnail_url,
+                    thumbnail_path = excluded.thumbnail_path,
+                    extra = excluded.extra
+                """,
+                (
+                    meta.media_id,
+                    raw_str,
+                    tags_str,
+                    meta.audio_info,
+                    meta.thumbnail_url,
+                    meta.thumbnail_path,
+                    extra_str,
+                ),
+            )
+
     # --- Publishing Accounts CRUD ---
 
     def upsert_publishing_account(self, account: PublishingAccount) -> None:
@@ -1241,9 +1368,15 @@ class Database:
                     updated_at = excluded.updated_at
                 """,
                 (
-                    account.id, account.platform, account.account_name,
-                    account.channel_id, account.channel_title, account.token_storage_key,
-                    1 if account.is_active else 0, account.created_at or now_iso, now_iso,
+                    account.id,
+                    account.platform,
+                    account.account_name,
+                    account.channel_id,
+                    account.channel_title,
+                    account.token_storage_key,
+                    1 if account.is_active else 0,
+                    account.created_at or now_iso,
+                    now_iso,
                 ),
             )
 
@@ -1342,11 +1475,24 @@ class Database:
                     completed_at = COALESCE(excluded.completed_at, publishing_jobs.completed_at)
                 """,
                 (
-                    job.id, job.media_id, job.channel_id, job.platform, job.status.value,
-                    job.scheduled_publish_at, job.display_timezone, job.upload_session_uri,
-                    job.bytes_uploaded, job.youtube_video_id, job.youtube_video_url,
-                    job.publication_date, job.retry_count, job.last_error, job.error_type,
-                    1 if job.rights_confirmed else 0, job.created_at or now_iso, now_iso,
+                    job.id,
+                    job.media_id,
+                    job.channel_id,
+                    job.platform,
+                    job.status.value,
+                    job.scheduled_publish_at,
+                    job.display_timezone,
+                    job.upload_session_uri,
+                    job.bytes_uploaded,
+                    job.youtube_video_id,
+                    job.youtube_video_url,
+                    job.publication_date,
+                    job.retry_count,
+                    job.last_error,
+                    job.error_type,
+                    1 if job.rights_confirmed else 0,
+                    job.created_at or now_iso,
+                    now_iso,
                     job.completed_at,
                 ),
             )
@@ -1509,9 +1655,14 @@ class Database:
                     updated_at = excluded.updated_at
                 """,
                 (
-                    session.session_uri, session.job_id, session.file_path, session.file_size,
-                    session.bytes_uploaded, session.last_chunk_byte,
-                    session.created_at or now_iso, now_iso,
+                    session.session_uri,
+                    session.job_id,
+                    session.file_path,
+                    session.file_size,
+                    session.bytes_uploaded,
+                    session.last_chunk_byte,
+                    session.created_at or now_iso,
+                    now_iso,
                 ),
             )
 
@@ -1564,9 +1715,17 @@ class Database:
                     updated_at = excluded.updated_at
                 """,
                 (
-                    entry.id, entry.job_id, entry.media_id, entry.channel_id,
-                    entry.scheduled_utc, entry.local_display_time, entry.timezone_name,
-                    entry.interval_spec, entry.status.value, entry.created_at or now_iso, now_iso,
+                    entry.id,
+                    entry.job_id,
+                    entry.media_id,
+                    entry.channel_id,
+                    entry.scheduled_utc,
+                    entry.local_display_time,
+                    entry.timezone_name,
+                    entry.interval_spec,
+                    entry.status.value,
+                    entry.created_at or now_iso,
+                    now_iso,
                 ),
             )
 

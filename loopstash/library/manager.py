@@ -23,6 +23,8 @@ class LibraryManager:
         self,
         username: Optional[str] = None,
         excluded: Optional[bool] = None,
+        download_status: Optional[str] = None,
+        publish_status: Optional[str] = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[MediaItem]:
@@ -30,9 +32,19 @@ class LibraryManager:
         return self.db.get_all_media_items(
             username=username,
             excluded=excluded,
+            download_status=download_status,
+            publish_status=publish_status,
             limit=limit,
             offset=offset,
         )
+
+    def exclude_item(self, media_id: str, is_excluded: bool = True) -> bool:
+        """Mark a video item as excluded from or included in publishing operations."""
+        item = self.db.get_media_item(media_id)
+        if not item:
+            return False
+        self.db.set_media_excluded(media_id, is_excluded)
+        return True
 
     def search(self, query: str, limit: int = 50) -> list[MediaItem]:
         """Search items across titles, captions, creators, and hashtags."""

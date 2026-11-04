@@ -15,7 +15,7 @@ from loopstash.backends.base import (
 from loopstash.database import Database
 from loopstash.discovery import DiscoveryEngine
 from loopstash.duplicate import DuplicateDetector
-from loopstash.metadata import serialize_reel_metadata, write_reel_metadata
+from loopstash.metadata import read_reel_metadata, serialize_reel_metadata, write_reel_metadata
 from loopstash.models import DownloadProgress, DownloadStatus, JobRecord, ReelItem
 from loopstash.retry import RetryPolicy
 from loopstash.storage import StorageManager
@@ -141,9 +141,9 @@ class Downloader:
                 username=uname,
                 total_discovered=len(jobs),
             )
-            # Convert JobRecord to ReelItem
-            reels_to_download = [
-                ReelItem(
+            reels_to_download = []
+            for j in jobs:
+                r_item = ReelItem(
                     shortcode=j.shortcode,
                     username=j.username,
                     reel_url=j.reel_url,
@@ -151,8 +151,18 @@ class Downloader:
                     profile_url=j.profile_url,
                     upload_timestamp=j.upload_timestamp,
                 )
-                for j in jobs
-            ]
+                meta_file = self.storage.get_metadata_file_path(r_item)
+                if meta_file.is_file():
+                    meta = read_reel_metadata(meta_file)
+                    if meta:
+                        r_item.caption = meta.get("caption")
+                        r_item.title = meta.get("title")
+                        r_item.duration = meta.get("duration_seconds")
+                        dims = meta.get("dimensions", {})
+                        r_item.width = dims.get("width")
+                        r_item.height = dims.get("height")
+                        r_item.extra_metadata = meta.get("raw_extractor_metadata", {})
+                reels_to_download.append(r_item)
 
             self._download_batch(
                 reels=reels_to_download,
@@ -197,11 +207,28 @@ class Downloader:
                         destination_file=str(target_path),
                     )
                     write_reel_metadata(meta_file, meta_dict)
+                else:
+                    existing_meta = read_reel_metadata(meta_file)
+                    if existing_meta:
+                        reel.caption = reel.caption or existing_meta.get("caption")
+                        reel.title = reel.title or existing_meta.get("title")
+                        reel.duration = reel.duration or existing_meta.get("duration_seconds")
+                        dims = existing_meta.get("dimensions", {})
+                        reel.width = reel.width or dims.get("width")
+                        reel.height = reel.height or dims.get("height")
+                        reel.extra_metadata = reel.extra_metadata or existing_meta.get(
+                            "raw_extractor_metadata", {}
+                        )
                 self.db.mark_completed(
                     shortcode=reel.shortcode,
                     destination_path=str(target_path),
                     file_size=file_size,
                     sha256_hash=sha256,
+                    caption=reel.caption,
+                    duration=reel.duration,
+                    width=reel.width,
+                    height=reel.height,
+                    raw_metadata=reel.extra_metadata,
                 )
                 summary.downloaded += 1
                 summary.total_bytes += file_size
@@ -261,6 +288,11 @@ class Downloader:
                     destination_path=str(final_path),
                     file_size=file_size,
                     sha256_hash=sha256,
+                    caption=reel.caption,
+                    duration=reel.duration,
+                    width=reel.width,
+                    height=reel.height,
+                    raw_metadata=reel.extra_metadata,
                 )
 
                 summary.downloaded += 1

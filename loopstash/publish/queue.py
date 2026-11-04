@@ -181,6 +181,7 @@ class PublishingQueue:
                 def _cb(bytes_sent: int, total_bytes: int, speed: float) -> None:
                     if progress_callback:
                         progress_callback(target_mid, bytes_sent, total_bytes, speed)
+
                 return _cb
 
             try:

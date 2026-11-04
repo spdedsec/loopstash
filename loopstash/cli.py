@@ -93,9 +93,29 @@ def main(
         callback=version_callback,
         is_eager=True,
     ),
+    quiet: bool = typer.Option(
+        False,
+        "--quiet",
+        "-q",
+        help="Suppress non-essential terminal outputs.",
+    ),
+    no_color: bool = typer.Option(
+        False,
+        "--no-color",
+        help="Disable ANSI colored output.",
+    ),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        "-v",
+        help="Enable detailed debug logs.",
+    ),
 ):
     """LOOPSTASH: Collect. Preserve. Organise."""
-    pass
+    if quiet:
+        console.quiet = True
+    if no_color:
+        console.no_color = True
 
 
 def print_header(title: str = "LOOPSTASH", subtitle: str = "Collect. Preserve. Organise.") -> None:
@@ -119,7 +139,10 @@ def _execute_instagram_download(
     max_items: Optional[int] = None,
     verbose: bool = False,
     no_color: bool = False,
+    quiet: bool = False,
 ) -> None:
+    if quiet:
+        console.quiet = True
     cfg = load_config()
     setup_logging(verbose=verbose or cfg.verbose, no_color=no_color or cfg.no_color)
 
@@ -249,6 +272,7 @@ def archive_instagram_cmd(
     ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose debug logging."),
     no_color: bool = typer.Option(False, "--no-color", help="Disable colored output."),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-essential output."),
 ):
     """Bulk download accessible Reels from a public Instagram profile."""
     _execute_instagram_download(
@@ -261,6 +285,7 @@ def archive_instagram_cmd(
         max_items=max_items,
         verbose=verbose,
         no_color=no_color,
+        quiet=quiet,
     )
 
 
@@ -531,17 +556,36 @@ def resume_alias(
 @library_app.command(name="list")
 def library_list_cmd(
     profile: Optional[str] = typer.Option(None, "--profile", "-p", help="Filter by creator."),
+    download_status: Optional[str] = typer.Option(
+        None, "--download-status", "-d", help="Filter by download status (e.g. COMPLETED, FAILED)."
+    ),
+    publish_status: Optional[str] = typer.Option(
+        None,
+        "--publish-status",
+        "-s",
+        help="Filter by publishing status (e.g. PUBLISHED, SCHEDULED).",
+    ),
+    show_excluded: bool = typer.Option(
+        False, "--show-excluded", help="Include excluded videos in library list."
+    ),
     limit: int = typer.Option(50, "--limit", "-n", help="Max items to display."),
     offset: int = typer.Option(0, "--offset", help="Number of items to skip."),
 ):
-    """List videos in the media library."""
+    """List videos in the media library with optional creator and status filters."""
     print_header(subtitle="Media Library")
     db = Database()
     mgr = LibraryManager(db)
-    items = mgr.list_items(username=profile, limit=limit, offset=offset)
+    items = mgr.list_items(
+        username=profile,
+        excluded=None if show_excluded else False,
+        download_status=download_status,
+        publish_status=publish_status,
+        limit=limit,
+        offset=offset,
+    )
 
     if not items:
-        console.print("[dim]Media library is empty. Archive reels or import videos to begin.[/dim]")
+        console.print("[dim]Media library is empty or no items match filters.[/dim]")
         return
 
     table = Table(box=box.ROUNDED)
@@ -784,6 +828,23 @@ def library_import_cmd(
         raise typer.Exit(code=1) from e
 
 
+@library_app.command(name="exclude")
+def library_exclude_cmd(
+    media_id: str = typer.Argument(..., help="Media ID or shortcode to exclude or re-include."),
+    undo: bool = typer.Option(False, "--undo", help="Re-include an excluded video for publishing."),
+):
+    """Exclude a video from publishing or re-include an excluded video."""
+    db = Database()
+    mgr = LibraryManager(db)
+    success = mgr.exclude_item(media_id, is_excluded=not undo)
+    if success:
+        action = "re-included for publishing" if undo else "excluded from publishing"
+        console.print(f"[green]Video '{media_id}' has been {action}.[/green]")
+    else:
+        console.print(f"[bold red]Error:[/bold red] Media '{media_id}' not found in library.")
+        raise typer.Exit(code=1)
+
+
 # ============================================================================
 # PUBLISH COMMANDS (YouTube OAuth & Uploads)
 # ============================================================================
@@ -879,6 +940,10 @@ def publish_disconnect_cmd(
 @publish_app.command(name="preview")
 def publish_preview_cmd(
     media_id: Optional[str] = typer.Option(None, "--media-id", "-m", help="Specific media ID."),
+    profile: Optional[str] = typer.Option(
+        None, "--profile", "-p", help="Filter by creator username."
+    ),
+    select: bool = typer.Option(False, "--select", "-s", help="Select videos interactively."),
     all_eligible: bool = typer.Option(False, "--all", "-a", help="Preview all eligible videos."),
 ):
     """Preview a publishing batch, title transformations, and rights confirmation status."""
@@ -886,13 +951,27 @@ def publish_preview_cmd(
     db = Database()
     queue = PublishingQueue(db)
 
-    items_to_check = []
+    items_to_check: list[str] = []
     if media_id:
         items_to_check = [media_id]
+    elif profile:
+        items_to_check = [
+            it.id for it in db.get_all_media_items(username=profile, excluded=False, limit=1000)
+        ]
+    elif select:
+        eligible = db.get_all_media_items(excluded=False, limit=50)
+        if not eligible:
+            console.print("[yellow]No eligible videos found to select.[/yellow]")
+            return
+        items_to_check = [it.id for it in eligible]
     elif all_eligible:
         items_to_check = [it.id for it in db.get_all_media_items(excluded=False, limit=1000)]
     else:
-        console.print("Please specify a video with --media-id or use --all.")
+        # Default behavior: preview up to 50 eligible unexcluded videos
+        items_to_check = [it.id for it in db.get_all_media_items(excluded=False, limit=50)]
+
+    if not items_to_check:
+        console.print("[yellow]No eligible media items found in library to preview.[/yellow]")
         return
 
     summary = queue.preview_batch(items_to_check)
@@ -934,6 +1013,12 @@ def publish_preview_cmd(
 @publish_app.command(name="youtube")
 def publish_youtube_cmd(
     media_id: Optional[str] = typer.Option(None, "--media-id", "-m", help="Single video ID."),
+    select: bool = typer.Option(
+        False, "--select", "-s", help="Select videos interactively from library."
+    ),
+    profile: Optional[str] = typer.Option(
+        None, "--profile", "-p", help="Publish all eligible videos for a profile."
+    ),
     all_videos: bool = typer.Option(False, "--all", "-a", help="Publish all eligible videos."),
     now: bool = typer.Option(False, "--now", help="Publish immediately with public visibility."),
     schedule: bool = typer.Option(False, "--schedule", help="Schedule videos using scheduler."),
@@ -960,11 +1045,49 @@ def publish_youtube_cmd(
     media_ids: list[str] = []
     if media_id:
         media_ids = [media_id]
+    elif profile:
+        media_ids = [
+            it.id for it in db.get_all_media_items(username=profile, excluded=False, limit=500)
+        ]
     elif all_videos:
         media_ids = [it.id for it in db.get_all_media_items(excluded=False, limit=500)]
+    elif select:
+        eligible = db.get_all_media_items(excluded=False, limit=50)
+        if not eligible:
+            console.print("[yellow]No eligible videos found to select.[/yellow]")
+            return
+        table = Table(title="Select Videos to Publish", box=box.ROUNDED)
+        table.add_column("#", justify="right", style="cyan")
+        table.add_column("Media ID", style="bold")
+        table.add_column("Title")
+        table.add_column("Size", justify="right")
+        for i, it in enumerate(eligible, start=1):
+            table.add_row(
+                str(i), it.id, (it.title or "-")[:40], f"{(it.file_size or 0) // 1024} KB"
+            )
+        console.print(table)
+        selection = typer.prompt(
+            "Enter video numbers or Media IDs (comma-separated, or 'all')", default="all"
+        )
+        if selection.strip().lower() == "all":
+            media_ids = [it.id for it in eligible]
+        else:
+            tokens = [t.strip() for t in selection.split(",") if t.strip()]
+            for tok in tokens:
+                if tok.isdigit() and 1 <= int(tok) <= len(eligible):
+                    media_ids.append(eligible[int(tok) - 1].id)
+                elif db.get_media_item(tok):
+                    media_ids.append(tok)
     else:
-        console.print("[yellow]Please specify --media-id <ID> or --all to select videos.[/yellow]")
-        return
+        # If neither specified, default to all eligible if --now is given
+        if now:
+            media_ids = [it.id for it in db.get_all_media_items(excluded=False, limit=500)]
+        else:
+            console.print(
+                "[yellow]Please specify --media-id <ID>, --select, "
+                "--profile <name>, or --all.[/yellow]"
+            )
+            return
 
     if not media_ids:
         console.print("[yellow]No eligible videos found to publish.[/yellow]")
@@ -1111,6 +1234,147 @@ def publish_status_cmd():
     console.print(table)
 
 
+@publish_app.command(name="import")
+def publish_import_cmd(
+    directory: Path = typer.Argument(..., help="Path to local folder containing video files."),
+    username: str = typer.Option("local_import", "--username", "-u", help="Creator username tag."),
+):
+    """Import local video folders and sidecars directly into publishing workflow."""
+    db = Database()
+    mgr = LibraryManager(db)
+    print_header(subtitle="Publishing Import")
+    try:
+        res = mgr.import_directory(directory=directory, username=username)
+        console.print(
+            f"[green]Publishing Import Complete:[/green] Added {res['imported']} new videos."
+        )
+        if res["skipped_duplicates"]:
+            console.print(
+                f"[dim]Skipped {res['skipped_duplicates']} existing duplicate files.[/dim]"
+            )
+    except Exception as e:
+        console.print(f"[bold red]Import Error:[/bold red] {e}")
+        raise typer.Exit(code=1) from e
+
+
+@publish_app.command(name="retry")
+def publish_retry_cmd(
+    job_id: Optional[str] = typer.Option(None, "--job-id", "-j", help="Specific job ID to retry."),
+):
+    """Retry failed or interrupted YouTube publishing jobs."""
+    print_header(subtitle="Retrying Publishing Jobs")
+    db = Database()
+    failed_jobs = []
+    if job_id:
+        j = db.get_publishing_job(job_id)
+        if j:
+            failed_jobs = [j]
+        else:
+            console.print(f"[bold red]Error:[/bold red] Publishing job '{job_id}' not found.")
+            raise typer.Exit(code=1)
+    else:
+        failed_jobs = db.get_all_publishing_jobs(
+            status=PublishStatus.FAILED
+        ) + db.get_all_publishing_jobs(status=PublishStatus.UPLOAD_INTERRUPTED)
+
+    if not failed_jobs:
+        console.print(
+            "[green]No failed or interrupted publishing jobs found. All queues clear![/green]"
+        )
+        return
+
+    console.print(f"[bold]Found {len(failed_jobs)} eligible job(s) to retry.[/bold]\n")
+    queue = PublishingQueue(db)
+    for job in failed_jobs:
+        console.print(f"Retrying job [cyan]{job.id}[/cyan] (Media: [bold]{job.media_id}[/bold])...")
+        try:
+            results = queue.publish_now(
+                media_ids=[job.media_id],
+                channel_id=job.channel_id,
+                confirm_rights=True,
+            )
+            for r in results:
+                st_color = (
+                    "[green]PUBLISHED[/green]"
+                    if r["status"] == "PUBLISHED"
+                    else f"[red]{r['status']}[/red]"
+                )
+                console.print(
+                    f"  Result: {st_color} {r.get('youtube_video_url', r.get('error', ''))}"
+                )
+        except Exception as e:
+            console.print(f"  [red]Failed:[/red] {e}")
+
+
+@publish_app.command(name="verify")
+def publish_verify_cmd(
+    channel: Optional[str] = typer.Option(
+        None, "--channel", "-c", help="Target YouTube channel ID."
+    ),
+):
+    """Verify remote processing status and visibility of uploaded YouTube videos."""
+    print_header(subtitle="YouTube Processing Status Verification")
+    db = Database()
+    accounts = db.get_all_publishing_accounts(active_only=True)
+    if not accounts:
+        console.print("[yellow]No active YouTube accounts connected to verify.[/yellow]")
+        return
+
+    target_channel = channel or accounts[0].channel_id
+    auth_mgr = YouTubeAuthManager(db)
+    try:
+        service = auth_mgr.build_service(target_channel)
+    except Exception as e:
+        console.print(f"[bold red]YouTube API Error:[/bold red] Could not build service: {e}")
+        return
+
+    jobs = db.get_all_publishing_jobs(limit=100)
+    uploaded_jobs = [j for j in jobs if j.youtube_video_id]
+
+    if not uploaded_jobs:
+        console.print("[dim]No uploaded YouTube videos found in job records to verify.[/dim]")
+        return
+
+    table = Table(title="YouTube Remote Video Verification", box=box.ROUNDED)
+    table.add_column("Media ID", style="cyan")
+    table.add_column("YouTube Video ID", style="bold")
+    table.add_column("Upload Status")
+    table.add_column("Privacy Status")
+    table.add_column("URL")
+
+    qm = QuotaManager(db)
+    for job in uploaded_jobs:
+        try:
+            qm.record_api_request()
+            res = (
+                service.videos()
+                .list(part="id,status,processingDetails", id=job.youtube_video_id)
+                .execute()
+            )
+            items = res.get("items", [])
+            if items:
+                status_info = items[0].get("status", {})
+                upload_status = status_info.get("uploadStatus", "unknown").upper()
+                privacy = status_info.get("privacyStatus", "unknown").upper()
+                table.add_row(
+                    job.media_id,
+                    job.youtube_video_id,
+                    f"[green]{upload_status}[/green]",
+                    privacy,
+                    job.youtube_video_url or "-",
+                )
+            else:
+                table.add_row(
+                    job.media_id, job.youtube_video_id, "[red]NOT FOUND / REMOVED[/red]", "-", "-"
+                )
+        except Exception as e:
+            table.add_row(
+                job.media_id, job.youtube_video_id, f"[yellow]CHECK FAILED ({e})[/yellow]", "-", "-"
+            )
+
+    console.print(table)
+
+
 # ============================================================================
 # SCHEDULING COMMANDS
 # ============================================================================
@@ -1176,6 +1440,12 @@ def schedule_create_cmd(
     media_id: Optional[str] = typer.Option(
         None, "--media-id", "-m", help="Single video ID to schedule."
     ),
+    select: bool = typer.Option(
+        False, "--select", "-s", help="Select videos interactively from library."
+    ),
+    profile: Optional[str] = typer.Option(
+        None, "--profile", "-p", help="Schedule all eligible videos for a profile."
+    ),
     all_videos: bool = typer.Option(
         False, "--all", "-a", help="Schedule all eligible library videos."
     ),
@@ -1198,11 +1468,43 @@ def schedule_create_cmd(
     media_ids: list[str] = []
     if media_id:
         media_ids = [media_id]
+    elif profile:
+        media_ids = [
+            it.id for it in db.get_all_media_items(username=profile, excluded=False, limit=500)
+        ]
     elif all_videos:
         media_ids = [it.id for it in db.get_all_media_items(excluded=False, limit=500)]
+    elif select:
+        eligible = db.get_all_media_items(excluded=False, limit=50)
+        if not eligible:
+            console.print("[yellow]No eligible videos found to select.[/yellow]")
+            return
+        table = Table(title="Select Videos to Schedule", box=box.ROUNDED)
+        table.add_column("#", justify="right", style="cyan")
+        table.add_column("Media ID", style="bold")
+        table.add_column("Title")
+        table.add_column("Size", justify="right")
+        for i, it in enumerate(eligible, start=1):
+            table.add_row(
+                str(i), it.id, (it.title or "-")[:40], f"{(it.file_size or 0) // 1024} KB"
+            )
+        console.print(table)
+        selection = typer.prompt(
+            "Enter video numbers or Media IDs (comma-separated, or 'all')", default="all"
+        )
+        if selection.strip().lower() == "all":
+            media_ids = [it.id for it in eligible]
+        else:
+            tokens = [t.strip() for t in selection.split(",") if t.strip()]
+            for tok in tokens:
+                if tok.isdigit() and 1 <= int(tok) <= len(eligible):
+                    media_ids.append(eligible[int(tok) - 1].id)
+                elif db.get_media_item(tok):
+                    media_ids.append(tok)
     else:
         console.print(
-            "[yellow]Specify --media-id <ID> or --all to select videos for scheduling.[/yellow]"
+            "[yellow]Specify --media-id <ID>, --select, --profile <name>, "
+            "or --all to select videos for scheduling.[/yellow]"
         )
         return
 
@@ -1346,6 +1648,23 @@ def schedule_reschedule_cmd(
     except Exception as e:
         console.print(f"[bold red]Rescheduling Failed:[/bold red] {e}")
         raise typer.Exit(code=1) from e
+
+
+@schedule_app.command(name="edit")
+def schedule_edit_cmd(
+    video_id: str = typer.Argument(
+        ..., help="YouTube video ID or Media ID to edit publication time for."
+    ),
+    date: str = typer.Option(..., "--date", "-d", help="New publication date (YYYY-MM-DD)."),
+    time_str: str = typer.Option(..., "--time", "-t", help="New publication time (HH:MM)."),
+    timezone_str: str = typer.Option(
+        "Asia/Kolkata", "--timezone", "-z", help="Explicit timezone name."
+    ),
+):
+    """Edit publication time for a scheduled YouTube video (alias for reschedule)."""
+    schedule_reschedule_cmd(
+        video_id=video_id, date=date, time_str=time_str, timezone_str=timezone_str
+    )
 
 
 @schedule_app.command(name="cancel")

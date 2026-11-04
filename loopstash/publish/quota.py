@@ -49,6 +49,24 @@ class QuotaManager:
             date_utc=today_utc,
         )
 
+    def record_api_request(self, count: int = 1) -> QuotaRecord:
+        """Record YouTube API read/verify requests without consuming upload units."""
+        today_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        return self.db.record_quota_usage(
+            upload_units=0,
+            api_requests=count,
+            date_utc=today_utc,
+        )
+
+    def record_failed_insert(self) -> QuotaRecord:
+        """Record a failed videos.insert attempt for quota tracking."""
+        today_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        return self.db.record_quota_usage(
+            upload_units=0,
+            api_requests=1,
+            date_utc=today_utc,
+        )
+
     def remaining_upload_capacity(self) -> int:
         """Calculate how many video uploads remain today before hitting quota."""
         rec = self.get_today_record()

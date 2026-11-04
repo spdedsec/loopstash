@@ -118,6 +118,8 @@ def check_dependencies() -> DiagnosticCheck:
         try:
             __import__(pkg)
         except ImportError:
+            if pkg == "gallery_dl" and find_gallery_dl_binary():
+                continue
             missing.append(pkg)
 
     if not missing:

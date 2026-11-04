@@ -179,7 +179,10 @@ def test_schedule_batch_execution(sched_db: Database, tmp_path: Path):
     assert not mock_uploader.upload_media.called
 
     # 2. Confirm rights -> should trigger upload with scheduled publishAt
-    mock_uploader.upload_media.return_value = ("yt_sched_vid_01", "https://youtu.be/yt_sched_vid_01")
+    mock_uploader.upload_media.return_value = (
+        "yt_sched_vid_01",
+        "https://youtu.be/yt_sched_vid_01",
+    )
     results = scheduler.schedule_batch(
         media_ids=["med_sched_01"],
         channel_id="UC_SCHED_01",

@@ -134,17 +134,41 @@ class YouTubeUploader:
 
         # Check existing resumable upload session for recovery
         existing_session = self.db.get_upload_session(job.id)
+        resumed_from_byte = 0
         if existing_session and existing_session.session_uri:
-            recovered_id = self._try_reconcile_existing_session(
+            reconcile_status, reconciled_data = self._reconcile_existing_session(
                 existing_session.session_uri, file_size
             )
-            if recovered_id:
-                logger.info("Successfully reconciled existing upload session: %s", recovered_id)
+            if reconcile_status == "COMPLETED":
+                recovered_id = reconciled_data["id"]
+                logger.info(
+                    "Successfully reconciled existing completed upload session: %s", recovered_id
+                )
                 video_url = f"https://youtu.be/{recovered_id}"
                 self.db.mark_job_published(job.id, recovered_id, video_url)
                 self.db.delete_upload_session(job.id)
                 self.quota_manager.record_upload(units=1)
                 return recovered_id, video_url
+            elif reconcile_status == "INCOMPLETE":
+                resumed_from_byte = reconciled_data.get("uploaded_bytes", 0)
+                logger.info("Resuming upload session from confirmed byte %d", resumed_from_byte)
+            elif reconcile_status == "UNCERTAIN":
+                err_msg = (
+                    f"Upload session status uncertain ({reconciled_data.get('error')}). "
+                    "Manual reconciliation required."
+                )
+                self.db.update_job_status(
+                    job.id,
+                    PublishStatus.NEEDS_ATTENTION,
+                    error=err_msg,
+                    error_type="UNCERTAIN_UPLOAD_STATE",
+                )
+                raise RuntimeError(
+                    f"Upload session state uncertain for job '{job.id}'. Marked as NEEDS_ATTENTION "
+                    "to prevent duplicate video creation on YouTube."
+                )
+            else:  # EXPIRED
+                self.db.delete_upload_session(job.id)
 
         self.db.update_job_status(job.id, PublishStatus.UPLOADING)
 
@@ -161,6 +185,10 @@ class YouTubeUploader:
             body=body,
             media_body=media,
         )
+
+        if resumed_from_byte > 0 and existing_session:
+            request.resumable_uri = existing_session.session_uri
+            request.resumable_progress = resumed_from_byte
 
         response = None
         retries = 0
@@ -282,23 +310,52 @@ class YouTubeUploader:
 
         return video_id, video_url
 
-    def _try_reconcile_existing_session(self, session_uri: str, file_size: int) -> Optional[str]:
-        """Query Google resumable upload endpoint to determine if upload previously completed."""
+    def _reconcile_existing_session(
+        self, session_uri: str, file_size: int
+    ) -> tuple[str, dict[str, Any]]:
+        """Query Google resumable upload endpoint with Content-Range: bytes */file_size.
+
+        Returns:
+            ("COMPLETED", {"id": video_id}) if upload finished
+            ("INCOMPLETE", {"uploaded_bytes": next_byte}) if partially uploaded
+            ("EXPIRED", {}) if session expired (404/410)
+            ("UNCERTAIN", {"error": ...}) if network/server error makes state ambiguous
+        """
         try:
             headers = {"Content-Range": f"bytes */{file_size}"}
-            resp = requests.put(session_uri, headers=headers, timeout=10.0)
+            resp = requests.put(session_uri, headers=headers, timeout=15.0)
+            self.quota_manager.record_api_request()
             if resp.status_code in (200, 201):
                 data = resp.json()
                 if "id" in data:
-                    return data["id"]
-            return None
+                    return "COMPLETED", {"id": data["id"]}
+            elif resp.status_code == 308:
+                range_header = resp.headers.get("Range")
+                uploaded_bytes = 0
+                if range_header and "-" in range_header:
+                    try:
+                        last_byte = int(range_header.split("-")[-1])
+                        uploaded_bytes = last_byte + 1
+                    except (ValueError, IndexError):
+                        pass
+                return "INCOMPLETE", {"uploaded_bytes": uploaded_bytes}
+            elif resp.status_code in (404, 410):
+                return "EXPIRED", {}
+            else:
+                return "UNCERTAIN", {"error": f"HTTP {resp.status_code}: {resp.text[:100]}"}
         except Exception as e:
-            logger.debug("Failed session reconciliation: %s", e)
-            return None
+            logger.warning("Session reconciliation network error: %s", e)
+            return "UNCERTAIN", {"error": str(e)}
+
+    def _try_reconcile_existing_session(self, session_uri: str, file_size: int) -> Optional[str]:
+        """Backward-compatible helper returning video ID if session is already completed."""
+        status, data = self._reconcile_existing_session(session_uri, file_size)
+        return data.get("id") if status == "COMPLETED" else None
 
     def _verify_uploaded_video(self, service: Resource, video_id: str) -> dict[str, Any]:
         """Verify that YouTube Data API returns valid status for the newly uploaded video."""
         try:
+            self.quota_manager.record_api_request()
             res = service.videos().list(part="id,status,snippet", id=video_id).execute()
             items = res.get("items", [])
             if items:

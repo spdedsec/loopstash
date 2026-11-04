@@ -41,6 +41,7 @@ hiddenimports = [
     "google_auth_oauthlib.flow",
     "keyring.backends",
     "zoneinfo",
+    "gallery_dl",
 ]
 
 a = Analysis(

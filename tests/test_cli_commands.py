@@ -23,9 +23,10 @@ def cli_env(tmp_path: Path):
     archive_dir = tmp_path / "archive"
     archive_dir.mkdir(parents=True, exist_ok=True)
 
-    with patch("loopstash.cli.Database", return_value=db), patch(
-        "loopstash.cli.StorageManager"
-    ) as mock_sm:
+    with (
+        patch("loopstash.cli.Database", return_value=db),
+        patch("loopstash.cli.StorageManager") as mock_sm,
+    ):
         mock_sm.return_value.storage_dir = archive_dir
         yield {"db": db, "archive_dir": archive_dir}
 
@@ -161,3 +162,49 @@ def test_cli_schedule_subcommands(cli_env):
     # schedule list
     res_list = runner.invoke(app, ["schedule", "list"])
     assert res_list.exit_code == 0
+
+
+def test_cli_new_required_commands(cli_env, tmp_path: Path):
+    """Verify Section 22 required commands: publish import, retry, verify,
+    schedule edit, and library exclude.
+    """
+    db: Database = cli_env["db"]
+
+    # 1. library exclude
+    item = MediaItem(id="med_cli_exclude", title="To Exclude")
+    db.upsert_media_item(item)
+    res_exclude = runner.invoke(app, ["library", "exclude", "med_cli_exclude"])
+    assert res_exclude.exit_code == 0
+    assert "excluded from publishing" in res_exclude.output
+
+    # Undo exclude
+    res_undo = runner.invoke(app, ["library", "exclude", "med_cli_exclude", "--undo"])
+    assert res_undo.exit_code == 0
+    assert "re-included" in res_undo.output
+
+    # 2. publish import
+    imp_dir = tmp_path / "cli_import_dir"
+    imp_dir.mkdir()
+    (imp_dir / "clip.mp4").write_bytes(b"CLIP_DATA")
+    res_import = runner.invoke(app, ["publish", "import", str(imp_dir)])
+    assert res_import.exit_code == 0
+    assert "Added 1 new videos" in res_import.output
+
+    # 3. publish retry
+    res_retry = runner.invoke(app, ["publish", "retry"])
+    assert res_retry.exit_code == 0
+    assert "Retrying Publishing Jobs" in res_retry.output
+
+    # 4. publish verify
+    res_verify = runner.invoke(app, ["publish", "verify"])
+    assert res_verify.exit_code == 0
+
+    # 5. schedule edit --help
+    res_sched_edit = runner.invoke(app, ["schedule", "edit", "--help"])
+    assert res_sched_edit.exit_code == 0
+    assert "Edit publication time" in res_sched_edit.output
+
+    # 6. publish preview default without arguments
+    res_preview = runner.invoke(app, ["publish", "preview"])
+    assert res_preview.exit_code == 0
+    assert "Publishing Batch Preview" in res_preview.output

@@ -137,3 +137,44 @@ def test_disconnect_account(auth_db: Database, tmp_path: Path):
     assert success is True
     assert not token_file.exists()
     assert auth_db.get_publishing_account(channel_id) is None
+
+
+def test_authorize_account_manual_browserless(auth_db: Database, tmp_path: Path):
+    """Test manual headless OAuth flow runs with open_browser=False and does not crash."""
+    manager = YouTubeAuthManager(auth_db)
+    client_secrets = tmp_path / "client_secret.json"
+    client_secrets.write_text(
+        '{"installed": {"client_id": "cid", "client_secret": "csec"}}', encoding="utf-8"
+    )
+
+    mock_flow = MagicMock()
+    mock_creds = MagicMock(spec=Credentials)
+    mock_creds.token = "token_xyz"
+    mock_creds.refresh_token = "refresh_xyz"
+    mock_creds.token_uri = "https://oauth2.googleapis.com/token"
+    mock_creds.client_id = "cid"
+    mock_creds.client_secret = "csec"
+    mock_creds.scopes = ["https://www.googleapis.com/auth/youtube.upload"]
+    mock_flow.run_local_server.return_value = mock_creds
+
+    mock_youtube = MagicMock()
+    mock_channels = MagicMock()
+    mock_channels.list.return_value.execute.return_value = {
+        "items": [{"id": "UC_MANUAL_TEST", "snippet": {"title": "Manual Flow Channel"}}]
+    }
+    mock_youtube.channels.return_value = mock_channels
+
+    with (
+        patch(
+            "loopstash.publish.oauth.InstalledAppFlow.from_client_secrets_file",
+            return_value=mock_flow,
+        ),
+        patch("loopstash.publish.oauth.build", return_value=mock_youtube),
+        patch("loopstash.publish.oauth.keyring.set_password"),
+    ):
+        acc = manager.authorize_account(client_secrets, manual=True)
+
+    assert acc.channel_id == "UC_MANUAL_TEST"
+    assert acc.channel_title == "Manual Flow Channel"
+    # Ensure open_browser was explicitly False
+    mock_flow.run_local_server.assert_called_with(port=0, prompt="consent", open_browser=False)
