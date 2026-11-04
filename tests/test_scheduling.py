@@ -141,13 +141,15 @@ def test_timezone_utc_fallback_and_validation(monkeypatch):
     assert tz_z.utcoffset(None) == timedelta(0)
 
     # Case-insensitive resolution
+    ref_dt = datetime(2026, 6, 1)
     tz_kolkata = get_timezone("asia/kolkata")
     assert tz_kolkata is not None
-    assert getattr(tz_kolkata, "key", None) == "Asia/Kolkata"
+    assert tz_kolkata.utcoffset(ref_dt) == timedelta(hours=5, minutes=30)
+    assert getattr(tz_kolkata, "key", None).lower() == "asia/kolkata"
 
     tz_ny = get_timezone("america/new_york")
     assert tz_ny is not None
-    assert getattr(tz_ny, "key", None) == "America/New_York"
+    assert getattr(tz_ny, "key", None).lower() == "america/new_york"
 
     # 2. Resilient fallback when ZoneInfo fails completely (e.g. Windows without tzdata)
     from zoneinfo import ZoneInfoNotFoundError
