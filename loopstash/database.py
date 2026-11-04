@@ -1526,6 +1526,42 @@ class Database:
             completed_at=row["completed_at"],
         )
 
+    def get_publishing_job_by_youtube_id(self, youtube_video_id: str) -> Optional[PublishingJob]:
+        """Fetch publishing job by YouTube video ID."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT * FROM publishing_jobs
+            WHERE youtube_video_id = ?
+            ORDER BY updated_at DESC LIMIT 1
+            """,
+            (youtube_video_id,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+        return PublishingJob(
+            id=row["id"],
+            media_id=row["media_id"],
+            channel_id=row["channel_id"],
+            platform=row["platform"],
+            status=PublishStatus(row["status"]),
+            scheduled_publish_at=row["scheduled_publish_at"],
+            display_timezone=row["display_timezone"],
+            upload_session_uri=row["upload_session_uri"],
+            bytes_uploaded=row["bytes_uploaded"],
+            youtube_video_id=row["youtube_video_id"],
+            youtube_video_url=row["youtube_video_url"],
+            publication_date=row["publication_date"],
+            retry_count=row["retry_count"],
+            last_error=row["last_error"],
+            error_type=row["error_type"],
+            rights_confirmed=bool(row["rights_confirmed"]),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            completed_at=row["completed_at"],
+        )
+
     def get_publishing_jobs_by_media(self, media_id: str) -> list[PublishingJob]:
         """Find all publishing jobs associated with a media item."""
         cursor = self.conn.cursor()
@@ -1815,10 +1851,42 @@ class Database:
             updated_at=row["updated_at"],
         )
 
+    def get_schedule_entry(self, entry_id: str) -> Optional[ScheduleEntry]:
+        """Get schedule slot by its ID."""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM schedule_entries WHERE id = ?", (entry_id,))
+        row = cursor.fetchone()
+        if not row:
+            return None
+        return ScheduleEntry(
+            id=row["id"],
+            job_id=row["job_id"],
+            media_id=row["media_id"],
+            channel_id=row["channel_id"],
+            scheduled_utc=row["scheduled_utc"],
+            local_display_time=row["local_display_time"],
+            timezone_name=row["timezone_name"],
+            interval_spec=row["interval_spec"],
+            status=PublishStatus(row["status"]),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
     def cancel_schedule(self, entry_id_or_job_id: str) -> bool:
         """Cancel a pending schedule slot."""
         now_iso = datetime.now(timezone.utc).isoformat()
         with self.transaction() as cur:
+            cur.execute(
+                """
+                SELECT job_id FROM schedule_entries
+                WHERE id = ? OR job_id = ?
+                """,
+                (entry_id_or_job_id, entry_id_or_job_id),
+            )
+            rows = cur.fetchall()
+            target_job_ids = {row["job_id"] for row in rows}
+            target_job_ids.add(entry_id_or_job_id)
+
             cur.execute(
                 """
                 UPDATE schedule_entries
@@ -1827,15 +1895,22 @@ class Database:
                 """,
                 (now_iso, entry_id_or_job_id, entry_id_or_job_id),
             )
-            cur.execute(
-                """
-                UPDATE publishing_jobs
-                SET status = 'CANCELLED', updated_at = ?
-                WHERE id = ?
-                """,
-                (now_iso, entry_id_or_job_id),
-            )
-            return cur.rowcount > 0
+            entries_updated = cur.rowcount > 0
+
+            jobs_updated = False
+            for jid in target_job_ids:
+                cur.execute(
+                    """
+                    UPDATE publishing_jobs
+                    SET status = 'CANCELLED', updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (now_iso, jid),
+                )
+                if cur.rowcount > 0:
+                    jobs_updated = True
+
+            return entries_updated or jobs_updated
 
     # --- Quota Management CRUD ---
 

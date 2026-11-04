@@ -200,6 +200,39 @@ class YouTubeScheduler:
 
         return results
 
+    def _find_job(self, identifier: str) -> Optional[PublishingJob]:
+        """Find publishing job by job ID, YouTube video ID, schedule entry ID, or media ID."""
+        # 1. By job ID
+        job = self.db.get_publishing_job(identifier)
+        if job:
+            return job
+
+        # 2. By YouTube video ID
+        job = self.db.get_publishing_job_by_youtube_id(identifier)
+        if job:
+            return job
+
+        # 3. By schedule entry ID
+        entry = self.db.get_schedule_entry(identifier)
+        if entry:
+            job = self.db.get_publishing_job(entry.job_id)
+            if job:
+                return job
+
+        # 4. By media ID (publishing jobs)
+        jobs = self.db.get_publishing_jobs_by_media(identifier)
+        if jobs:
+            return jobs[0]
+
+        # 5. By media ID (schedule entries)
+        sched_entry = self.db.get_schedule_by_media(identifier)
+        if sched_entry:
+            job = self.db.get_publishing_job(sched_entry.job_id)
+            if job:
+                return job
+
+        return None
+
     def reschedule_video(
         self,
         job_or_media_id: str,
@@ -208,12 +241,7 @@ class YouTubeScheduler:
         timezone_str: str,
     ) -> bool:
         """Update publication slot time and inform YouTube Data API."""
-        job = self.db.get_publishing_job(job_or_media_id)
-        if not job:
-            jobs = self.db.get_publishing_jobs_by_media(job_or_media_id)
-            if jobs:
-                job = jobs[0]
-
+        job = self._find_job(job_or_media_id)
         if not job:
             raise KeyError(f"Publishing record '{job_or_media_id}' not found.")
 
@@ -255,14 +283,23 @@ class YouTubeScheduler:
         return True
 
     def cancel_schedule(self, job_or_media_id: str) -> bool:
-        """Cancel scheduled release in local database."""
-        job = self.db.get_publishing_job(job_or_media_id)
-        if not job:
-            jobs = self.db.get_publishing_jobs_by_media(job_or_media_id)
-            if jobs:
-                job = jobs[0]
-
+        """Cancel scheduled release in remote YouTube API and local database."""
+        job = self._find_job(job_or_media_id)
         if not job:
             return False
+
+        # If already uploaded to YouTube, update remote video resource to cancel scheduled publish
+        if job.youtube_video_id:
+            service = self.auth_manager.build_service(job.channel_id)
+            body = {
+                "id": job.youtube_video_id,
+                "status": {
+                    "privacyStatus": "private",
+                },
+            }
+            try:
+                service.videos().update(part="status", body=body).execute()
+            except Exception as e:
+                raise RuntimeError(f"YouTube rejected cancellation request: {e}") from e
 
         return self.db.cancel_schedule(job.id)

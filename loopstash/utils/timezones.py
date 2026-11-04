@@ -12,23 +12,39 @@ def get_timezone(tz_name: Optional[str]) -> tzinfo:
 
     Defaults to UTC if None or empty. Falls back to datetime.timezone.utc for UTC
     if ZoneInfo cannot find timezone data (e.g. on Windows without tzdata).
+    Supports common UTC aliases (UTC, Etc/UTC, Z, GMT, Etc/GMT) and case-insensitive
+    matching against available IANA timezones.
     """
     if not tz_name or not tz_name.strip():
         try:
             return ZoneInfo("UTC")
         except (ZoneInfoNotFoundError, KeyError):
             return timezone.utc
+
     clean_tz = tz_name.strip()
-    if clean_tz.upper() in ("UTC", "ETC/UTC", "Z"):
+    upper_tz = clean_tz.upper()
+
+    if upper_tz in ("UTC", "ETC/UTC", "Z", "GMT", "ETC/GMT"):
         try:
-            return ZoneInfo(clean_tz)
+            target = "UTC" if upper_tz in ("UTC", "Z") else upper_tz
+            return ZoneInfo(target)
         except (ZoneInfoNotFoundError, KeyError):
             return timezone.utc
+
     try:
         return ZoneInfo(clean_tz)
     except (ZoneInfoNotFoundError, KeyError) as e:
-        if clean_tz.upper() in ("UTC", "ETC/UTC", "Z"):
-            return timezone.utc
+        # Try case-insensitive matching from available_timezones
+        try:
+            from zoneinfo import available_timezones
+
+            tz_lower = clean_tz.lower()
+            matched = next((z for z in available_timezones() if z.lower() == tz_lower), None)
+            if matched:
+                return ZoneInfo(matched)
+        except Exception:
+            pass
+
         raise ValueError(
             f"Invalid timezone '{clean_tz}'. Please use a standard IANA timezone name "
             "(e.g. 'UTC', 'Asia/Kolkata', 'America/New_York')."
@@ -67,10 +83,7 @@ def parse_schedule_datetime(
     except ValueError as e:
         raise ValueError(f"Invalid time values in '{time_str}': {e}") from e
 
-    naive_dt = datetime.combine(parsed_date, parsed_time)
-    # Localize with ZoneInfo
-    localized_dt = naive_dt.replace(tzinfo=tz)
-    return localized_dt
+    return datetime.combine(parsed_date, parsed_time, tzinfo=tz)
 
 
 def to_utc_iso(dt: datetime) -> str:

@@ -138,13 +138,16 @@ def test_cli_publish_subcommands(cli_env):
 
 def test_cli_schedule_subcommands(cli_env):
     """Verify schedule preview and listing commands."""
+    from datetime import datetime, timedelta, timezone
+
+    future_date = (datetime.now(timezone.utc) + timedelta(days=30)).strftime("%Y-%m-%d")
     res_preview = runner.invoke(
         app,
         [
             "schedule",
             "preview",
             "--start-date",
-            "2026-12-01",
+            future_date,
             "--start-time",
             "10:00",
             "--timezone",
@@ -157,7 +160,7 @@ def test_cli_schedule_subcommands(cli_env):
     )
     assert res_preview.exit_code == 0
     assert "Publication Calendar Preview" in res_preview.output
-    assert "2026-12-01" in res_preview.output
+    assert future_date in res_preview.output
 
     # schedule list
     res_list = runner.invoke(app, ["schedule", "list"])

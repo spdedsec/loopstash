@@ -133,6 +133,22 @@ def test_timezone_utc_fallback_and_validation(monkeypatch):
     tz_utc = get_timezone("UTC")
     assert tz_utc.utcoffset(None) == timedelta(0)
 
+    # GMT and Z aliases
+    tz_gmt = get_timezone("GMT")
+    assert tz_gmt.utcoffset(None) == timedelta(0)
+
+    tz_z = get_timezone("Z")
+    assert tz_z.utcoffset(None) == timedelta(0)
+
+    # Case-insensitive resolution
+    tz_kolkata = get_timezone("asia/kolkata")
+    assert tz_kolkata is not None
+    assert getattr(tz_kolkata, "key", None) == "Asia/Kolkata"
+
+    tz_ny = get_timezone("america/new_york")
+    assert tz_ny is not None
+    assert getattr(tz_ny, "key", None) == "America/New_York"
+
     # 2. Resilient fallback when ZoneInfo fails completely (e.g. Windows without tzdata)
     from zoneinfo import ZoneInfoNotFoundError
 
@@ -149,6 +165,9 @@ def test_timezone_utc_fallback_and_validation(monkeypatch):
     assert tm.get_timezone(None) == timezone.utc
     assert tm.get_timezone("") == timezone.utc
     assert tm.get_timezone("Etc/UTC") == timezone.utc
+    assert tm.get_timezone("GMT") == timezone.utc
+    assert tm.get_timezone("gmt") == timezone.utc
+    assert tm.get_timezone("Z") == timezone.utc
 
     # Non-UTC timezone without tzdata should raise clean ValueError
     with pytest.raises(ValueError, match="Invalid timezone 'America/New_York'"):
@@ -294,10 +313,11 @@ def test_reschedule_and_cancel_video(sched_db: Database, tmp_path: Path):
         auth_manager=mock_auth,
     )
 
-    # Reschedule to 5 days in future
+    # 1. Reschedule using YouTube video ID instead of job ID
     new_future_date = (datetime.now(timezone.utc) + timedelta(days=5)).strftime("%Y-%m-%d")
+    mock_service.videos().update.reset_mock()
     success = scheduler.reschedule_video(
-        job_or_media_id=job.id,
+        job_or_media_id="yt_resched_vid_99",
         new_date=new_future_date,
         new_time="15:30",
         timezone_str="UTC",
@@ -309,8 +329,29 @@ def test_reschedule_and_cancel_video(sched_db: Database, tmp_path: Path):
     updated_job = sched_db.get_publishing_job(job.id)
     assert updated_job.scheduled_publish_at.startswith(new_future_date)
 
-    # Cancel schedule
-    cancel_success = scheduler.cancel_schedule(job.id)
+    # 2. Cancel schedule using YouTube video ID and verify YouTube API was called
+    mock_service.videos().update.reset_mock()
+    cancel_success = scheduler.cancel_schedule("yt_resched_vid_99")
     assert cancel_success is True
+    assert mock_service.videos().update.called
     cancelled_job = sched_db.get_publishing_job(job.id)
     assert cancelled_job.status == PublishStatus.CANCELLED
+
+    # 3. Verify that if YouTube API rejects cancellation, error is raised and job is not cancelled
+    job_reject = PublishingJob(
+        id="job_reject_01",
+        media_id="med_resched_02",
+        channel_id="UC_SCHED_02",
+        scheduled_publish_at=future_iso,
+        youtube_video_id="yt_reject_vid",
+        status=PublishStatus.SCHEDULED,
+    )
+    sched_db.upsert_publishing_job(job_reject)
+    mock_service.videos().update.side_effect = Exception("YouTube API quota or permission error")
+
+    with pytest.raises(RuntimeError, match="YouTube rejected cancellation request"):
+        scheduler.cancel_schedule("yt_reject_vid")
+
+    # DB state must not be falsely marked CANCELLED
+    db_job_reject = sched_db.get_publishing_job("job_reject_01")
+    assert db_job_reject.status == PublishStatus.SCHEDULED

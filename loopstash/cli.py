@@ -1267,6 +1267,12 @@ def publish_retry_cmd(
     failed_jobs = []
     if job_id:
         j = db.get_publishing_job(job_id)
+        if not j:
+            j = db.get_publishing_job_by_youtube_id(job_id)
+        if not j:
+            jobs_by_media = db.get_publishing_jobs_by_media(job_id)
+            if jobs_by_media:
+                j = jobs_by_media[0]
         if j:
             failed_jobs = [j]
         else:
@@ -1452,6 +1458,9 @@ def schedule_create_cmd(
     confirm_rights: bool = typer.Option(
         False, "--confirm-rights", help="Confirm ownership or republishing license."
     ),
+    shuffle: bool = typer.Option(
+        False, "--shuffle", help="Randomize publishing order when scheduling."
+    ),
 ):
     """Bulk upload videos ahead of time and schedule future public release."""
     db = Database()
@@ -1511,6 +1520,11 @@ def schedule_create_cmd(
     if not media_ids:
         console.print("[yellow]No eligible videos found to schedule.[/yellow]")
         return
+
+    if shuffle:
+        import random
+
+        random.shuffle(media_ids)
 
     print_header(subtitle="Creating Bulk YouTube Publication Schedule")
     console.print(f"[bold]Channel:[/bold] {target_channel}")
@@ -1674,11 +1688,15 @@ def schedule_cancel_cmd(
     """Cancel a pending publication slot."""
     db = Database()
     scheduler = YouTubeScheduler(db)
-    ok = scheduler.cancel_schedule(video_id)
-    if ok:
-        console.print(f"[green]Successfully cancelled scheduled slot for '{video_id}'.[/green]")
-    else:
-        console.print(f"[yellow]No scheduled slot found for '{video_id}'.[/yellow]")
+    try:
+        ok = scheduler.cancel_schedule(video_id)
+        if ok:
+            console.print(f"[green]Successfully cancelled scheduled slot for '{video_id}'.[/green]")
+        else:
+            console.print(f"[yellow]No scheduled slot found for '{video_id}'.[/yellow]")
+    except Exception as e:
+        console.print(f"[bold red]Cancellation Failed:[/bold red] {e}")
+        raise typer.Exit(code=1) from e
 
 
 # ============================================================================
